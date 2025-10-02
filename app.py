@@ -52,20 +52,20 @@ def extract_means_ignore_errors(table):
     means = {}
     found = False
     for row in table.rows:
-        first_cell = row.cells[0].text.strip()
-        if first_cell == "Среднее:":
+        first_cell_text = row.cells[0].text.strip()
+        if first_cell_text == "Среднее:":
             if found:
                 # Вторая строка "Среднее:" — погрешности, пропускаем
                 break
             for j, elem in enumerate(headers):
                 if j + 1 < len(row.cells):
-                    try:
-                        val_text = row.cells[j + 1].text.strip().replace(",", ".").replace(" ", "")
-                        if val_text and val_text not in ("-", "±"):
-                            val = float(val_text)
+                    val_text = row.cells[j + 1].text.strip()
+                    if val_text and val_text not in ("-", "±", ""):
+                        try:
+                            val = float(val_text.replace(",", ".").replace(" ", ""))
                             means[elem] = val
-                    except Exception:
-                        pass
+                        except Exception:
+                            pass
             found = True
     return means
 
@@ -123,7 +123,7 @@ def parse_protocol_docx(file):
                 # Ищем марку стали в этом параграфе
                 steel_match = re.search(r"марке стали\s*[:\s]*([А-Яа-я0-9\sХхМФТ]+)", text)
                 if steel_match:
-                    steel_text = steel_match.group(1).strip().replace(" ", "").upper()
+                    steel_text = steel_match.group(1).strip().upper().replace(" ", "")
                     if "12Х1МФ" in steel_text:
                         current_steel = "12Х1МФ"
                     elif "12Х18Н12Т" in steel_text:
@@ -133,7 +133,7 @@ def parse_protocol_docx(file):
                 # Если марка стали в следующем параграфе
                 steel_match = re.search(r"марке стали\s*[:\s]*([А-Яа-я0-9\sХхМФТ]+)", text)
                 if steel_match:
-                    steel_text = steel_match.group(1).strip().replace(" ", "").upper()
+                    steel_text = steel_match.group(1).strip().upper().replace(" ", "")
                     if "12Х1МФ" in steel_text:
                         current_steel = "12Х1МФ"
                     elif "12Х18Н12Т" in steel_text:
