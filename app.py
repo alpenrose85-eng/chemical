@@ -7,6 +7,8 @@ from datetime import datetime
 import io
 from docx.shared import Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
+from docx.shared import Pt
 import re
 
 class ChemicalAnalyzer:
@@ -39,7 +41,7 @@ class ChemicalAnalyzer:
                 "Cu": (None, 0.30),
                 "S": (None, 0.020),
                 "P": (None, 0.035),
-                "source": "ГОСТ 5632-2014"
+                "source": "ТУ 14-3Р-55-2001"
             },
             "сталь 20": {
                 "C": (0.17, 0.24),
@@ -50,7 +52,7 @@ class ChemicalAnalyzer:
                 "Cu": (None, 0.30),
                 "P": (None, 0.030),
                 "S": (None, 0.025),
-                "source": "ГОСТ 1050-2013"
+                "source": "ТУ 14-3Р-55-2001"
             },
             "Ди82": {
                 "C": (0.08, 0.12),
@@ -64,7 +66,7 @@ class ChemicalAnalyzer:
                 "Cu": (None, 0.30),
                 "S": (None, 0.015),
                 "P": (None, 0.03),
-                "source": "Спецификация"
+                "source": "ТУ 14-3Р-55-2001"
             },
             "Ди59": {
                 "C": (0.06, 0.10),
@@ -76,7 +78,7 @@ class ChemicalAnalyzer:
                 "Cu": (2.00, 2.50),
                 "S": (None, 0.02),
                 "P": (None, 0.03),
-                "source": "Спецификация"
+                "source": "ТУ 14-3Р-55-2001"
             }
         }
         
@@ -278,8 +280,8 @@ class ChemicalAnalyzer:
                 data.append(row)
                 compliance_data.append(compliance_row)
             
-            # Добавляем строку с нормативами
-            requirements_row = {"№": "", "Образец": f"Требования {standard.get('source', '')} для стали марки {grade}"}
+            # Добавляем строку с нормативами (всегда используем ТУ 14-3Р-55-2001)
+            requirements_row = {"№": "", "Образец": f"Требования ТУ 14-3Р-55-2001 для стали марки {grade}"}
             requirements_compliance = {"№": "requirements", "Образец": "requirements"}
             
             for elem in norm_elements:
@@ -375,6 +377,27 @@ def reorder_samples_by_number(df, compliance_data):
     
     return result_df, result_compliance
 
+def set_font_times_new_roman(doc):
+    """Устанавливает шрифт Times New Roman для всего документа"""
+    # Устанавливаем шрифт для стилей
+    styles = doc.styles
+    for style in styles:
+        if hasattr(style, 'font'):
+            style.font.name = 'Times New Roman'
+    
+    # Устанавливаем шрифт для всех параграфов
+    for paragraph in doc.paragraphs:
+        for run in paragraph.runs:
+            run.font.name = 'Times New Roman'
+    
+    # Устанавливаем шрифт для всех таблиц
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for paragraph in cell.paragraphs:
+                    for run in paragraph.runs:
+                        run.font.name = 'Times New Roman'
+
 def main():
     st.set_page_config(page_title="Анализатор химсостава металла", layout="wide")
     st.title("🔬 Анализатор химического состава металла")
@@ -417,7 +440,7 @@ def main():
         st.subheader("Добавить новую марку стали")
         
         new_grade = st.text_input("Марка стали")
-        new_source = st.text_input("Нормативный документ")
+        new_source = st.text_input("Нормативный документ", value="ТУ 14-3Р-55-2001")
         
         if new_grade:
             st.write("**Добавление элементов:**")
@@ -532,8 +555,11 @@ def main():
                 st.write("**Редактирование таблицы:**")
                 st.write("Измените номера в столбце '№' для изменения порядка образцов")
                 
+                # Создаем копию данных для редактирования
+                editable_data = table_data["data"].copy()
+                
                 edited_df = st.data_editor(
-                    table_data["data"],
+                    editable_data,
                     key=f"editor_{grade}",
                     num_rows="fixed",
                     use_container_width=True,
@@ -543,7 +569,8 @@ def main():
                             help="Порядковый номер образца",
                             min_value=1,
                             max_value=100,
-                            step=1
+                            step=1,
+                            format="%d"
                         ),
                         "Образец": st.column_config.TextColumn(
                             "Образец",
@@ -585,6 +612,9 @@ def create_word_report(tables, samples, analyzer):
     """Создание Word отчета"""
     try:
         doc = Document()
+        
+        # Устанавливаем шрифт Times New Roman для всего документа
+        set_font_times_new_roman(doc)
         
         # Титульная страница
         title = doc.add_heading('Протокол анализа химического состава', 0)
