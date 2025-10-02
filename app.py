@@ -461,7 +461,11 @@ for _, r in df_display.iterrows():
     html_rows.append("<tr>" + row_html + "</tr>")
 
 # Строка норм — только для реально используемых марок
-norm_row_html = "<tr><td style='font-family: Times New Roman; text-align:center;' colspan='{len(cols_order)}'>Требования ТУ 14-3Р-55-2001 [3] для стали марки {all_samples[0]['steel'] if all_samples else 'Неизвестно'}</td></tr><tr><td style='font-family: Times New Roman;'>Нормы</td>"
+norm_row_html = "<tr><td style='font-family: Times New Roman; text-align:center;' colspan='{len(cols_order)}'>Требования ТУ 14-3Р-55-2001 [3] для стали марки {all_samples[0]['steel'] if all_samples else 'Неизвестно'}</td></tr>"
+html_rows.append(norm_row_html)
+
+# Добавляем значения норм в отдельную строку
+norm_values_row = "<tr><td style='font-family: Times New Roman;'>Нормы</td>"
 for elem in cols_order[1:]:
     parts = []
     for sample in all_samples:
@@ -469,9 +473,9 @@ for elem in cols_order[1:]:
         if steel in st.session_state.steel_norms and elem in st.session_state.steel_norms[steel]:
             nmin, nmax = st.session_state.steel_norms[steel][elem]
             parts.append(format_norm(nmin, nmax))
-    norm_row_html += f"<td style='font-family: Times New Roman;'>{'; '.join(set(parts)) if parts else '–'}</td>"
-norm_row_html += "</tr>"
-html_rows.append(norm_row_html)
+    norm_values_row += f"<td style='font-family: Times New Roman;'>{'; '.join(set(parts)) if parts else '–'}</td>"
+norm_values_row += "</tr>"
+html_rows.append(norm_values_row)
 
 html_table = f'<table border="1" style="border-collapse:collapse; font-family: Times New Roman;">{"".join(html_rows)}</table>'
 st.markdown("### Сводная таблица (копируйте в Word):")
@@ -511,4 +515,3 @@ for sample in all_samples:
                     st.success(f"{elem}: {format_value(val, elem)} ± {unc:.3f} → {interval} — в норме")
         if sample["notes"]:
             st.info(f"📌 Примечание: {sample['notes']}")
-            
