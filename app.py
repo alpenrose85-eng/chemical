@@ -302,8 +302,14 @@ def main():
         if selected_standard:
             st.write(f"**Норматив для {selected_standard}:**")
             standard = analyzer.standards[selected_standard]
-            for elem, (min_val, max_val) in standard.items():
-                if elem != "source":
+            for elem, value_range in standard.items():
+                # Пропускаем поле 'source'
+                if elem == "source":
+                    continue
+                
+                # Проверяем, что это действительно диапазон значений
+                if isinstance(value_range, tuple) and len(value_range) == 2:
+                    min_val, max_val = value_range
                     if min_val is not None and max_val is not None:
                         st.write(f"- {elem}: {min_val:.3f} - {max_val:.3f}")
                     elif min_val is not None:
@@ -314,33 +320,17 @@ def main():
         
         st.divider()
         
-        # Добавление/редактирование нормативов
-        st.subheader("Добавить/редактировать марку стали")
+        # Добавление новых нормативов
+        st.subheader("Добавить новую марку стали")
         
-        # Выбор марки для редактирования или ввод новой
-        edit_option = st.radio(
-            "Выберите действие:",
-            ["Создать новую марку", "Редактировать существующую"]
-        )
-        
-        if edit_option == "Редактировать существующую":
-            edit_grade = st.selectbox(
-                "Выберите марку для редактирования",
-                options=list(analyzer.standards.keys())
-            )
-            new_grade = st.text_input("Марка стали", value=edit_grade)
-            new_source = st.text_input("Нормативный документ", 
-                                     value=analyzer.standards[edit_grade].get("source", ""))
-        else:
-            edit_grade = None
-            new_grade = st.text_input("Марка стали")
-            new_source = st.text_input("Нормативный документ")
+        new_grade = st.text_input("Марка стали")
+        new_source = st.text_input("Нормативный документ")
         
         if new_grade:
             st.write("**Добавление элементов:**")
             
-            # Динамическое добавление элементов
-            if "elements" not in st.session_state:
+            # Инициализация session_state для элементов
+            if 'elements' not in st.session_state:
                 st.session_state.elements = []
             
             # Поля для добавления нового элемента
@@ -354,15 +344,16 @@ def main():
             
             if st.button("Добавить элемент") and new_element:
                 st.session_state.elements.append({
-                    "element": new_element.strip(),
+                    "element": new_element.strip().upper(),
                     "min": new_min if new_min > 0 else None,
                     "max": new_max if new_max > 0 else None
                 })
-                st.rerun()
             
             # Отображение добавленных элементов
             if st.session_state.elements:
                 st.write("Добавленные элементы:")
+                elements_to_remove = []
+                
                 for i, elem_data in enumerate(st.session_state.elements):
                     col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
                     with col1:
@@ -375,13 +366,18 @@ def main():
                         st.write(f"Макс: {max_val:.3f}" if max_val else "Макс: не норм.")
                     with col4:
                         if st.button("❌", key=f"del_{i}"):
-                            st.session_state.elements.pop(i)
-                            st.rerun()
+                            elements_to_remove.append(i)
+                
+                # Удаляем отмеченные элементы
+                for i in sorted(elements_to_remove, reverse=True):
+                    st.session_state.elements.pop(i)
             
             # Кнопка сохранения
             if st.button("💾 Сохранить норматив"):
                 if not st.session_state.elements:
                     st.error("Добавьте хотя бы один элемент!")
+                elif new_grade in analyzer.standards:
+                    st.error(f"Марка стали {new_grade} уже существует!")
                 else:
                     # Создаем словарь с элементами
                     elements_ranges = {}
@@ -399,7 +395,6 @@ def main():
                     st.session_state.elements = []
                     
                     st.success(f"Норматив для {new_grade} сохранен!")
-                    st.rerun()
     
     # Основная область для загрузки файлов
     st.header("Загрузка протоколов")
