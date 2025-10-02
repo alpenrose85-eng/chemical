@@ -8,7 +8,7 @@ from docx.oxml import OxmlElement
 from docx.shared import Pt
 
 # Нормы для 12Х1МФ (ТУ 14-3Р-55-2001)
-NORMS_12X1MF = {
+NORMS = {
     "C": (0.10, 0.15),
     "Si": (0.17, 0.27),
     "Mn": (0.40, 0.70),
@@ -16,42 +16,47 @@ NORMS_12X1MF = {
     "Ni": (None, 0.25),
     "Mo": (0.25, 0.35),
     "V": (0.15, 0.30),
-    "Cu": (None, 0.20),
+    "Cu": (None, 0.20),   # ← медь до сотых
     "S": (None, 0.025),
     "P": (None, 0.025)
 }
 
+# Порядок элементов в таблице
+ELEMENTS_ORDER = ["C", "Si", "Mn", "Cr", "Ni", "Mo", "V", "Cu", "S", "P"]
+
 def parse_protocol_docx(file):
     doc = Document(file)
     full_text = "\n".join([p.text for p in doc.paragraphs])
-    # Разделяем по заголовкам "Наименование образца"
     blocks = re.split(r"Наименование образца\s*:", full_text)[1:]
     tables = doc.tables
     samples = []
-    table_idx = 0
 
-    for block in blocks:
+    # Каждый образец = 2 таблицы → всего должно быть 6 таблиц
+    if len(tables) < 6:
+        raise ValueError("Недостаточно таблиц в документе")
+
+    for i, block in enumerate(blocks):
         lines = [line.strip() for line in block.split("\n") if line.strip()]
         if not lines:
             continue
         sample_name = lines[0]
 
-        # 🔧 Извлекаем марку стали: "12Х1МФ" (игнорируем запятые и примечания)
+        # Марка стали
         steel_match = re.search(r"марке стали:\s*([А-Яа-я0-9Хх]+)", block)
         steel = steel_match.group(1).strip() if steel_match else "Неизвестно"
 
         notes = "с учетом допустимых отклонений" if "с учетом допустимых отклонений" in block else ""
 
-        if table_idx + 1 >= len(tables):
-            break
+        # Берём 2 таблицы для i-го образца
+        table1 = tables[i * 2]
+        table2 = tables[i * 2 + 1]
 
-        def extract_means_from_table(table):
+        def get_means(table):
             headers = []
-            for cell in table.rows[0].cells[1:]:  # Пропускаем первую пустую ячейку
+            for cell in table.rows[0].cells[1:]:
                 h = cell.text.strip().replace("\n", "").replace("%", "").strip()
                 if h:
                     headers.append(h)
-
             means = {}
             for row in table.rows:
                 if row.cells[0].text.strip() == "Среднее:":
@@ -62,16 +67,13 @@ def parse_protocol_docx(file):
                                 means[elem] = val
                             except:
                                 pass
-                    break  # Берём только ПЕРВУЮ строку "Среднее:"
+                    break
             return means
 
-        # Парсим две таблицы подряд
-        means1 = extract_means_from_table(tables[table_idx])
-        means2 = extract_means_from_table(tables[table_idx + 1])
-        table_idx += 2
-
-        # Объединяем значения из двух таблиц
+        means1 = get_means(table1)
+        means2 = get_means(table2)
         all_means = {**means1, **means2}
+
         samples.append({
             "name": sample_name,
             "steel": steel,
@@ -81,32 +83,29 @@ def parse_protocol_docx(file):
 
     return samples
 
-def evaluate_status_simple(value, norm_min, norm_max):
-    """Сравнение без учёта погрешности"""
+def evaluate_status(value, norm_min, norm_max):
     if norm_min is not None and value < norm_min:
         return "🔴"
     if norm_max is not None and value > norm_max:
         return "🔴"
-    return ""  # Соответствует
+    return ""
 
 def format_value(val, elem):
     if elem in ["S", "P"]:
         return f"{val:.3f}".replace(".", ",")
-    elif elem == "Cu":
-        return f"{val:.2f}".replace(".", ",")  # Округляем медь до сотых
     else:
         return f"{val:.2f}".replace(".", ",")
 
 def format_norm(norm_min, norm_max):
     if norm_min is None:
-        return f"≤{norm_max:.3f}".replace(".", ",")
+        return f"≤{norm_max:.2f}".replace(".", ",")  # ← медь и другие — до сотых!
     elif norm_max is None:
-        return f"≥{norm_min:.3f}".replace(".", ",")
+        return f"≥{norm_min:.2f}".replace(".", ",")
     else:
         return f"{norm_min:.2f}–{norm_max:.2f}".replace(".", ",")
 
 # ================================
-# Генерация Word-отчёта
+# Word-отчёт
 # ================================
 def create_word_report(samples):
     doc = Document()
@@ -118,31 +117,28 @@ def create_word_report(samples):
     doc.add_heading('Отчёт по химическому составу металла', 0)
     doc.add_paragraph('Источник: Протокол № 27/05 от 26.05.2025, ОАО «ВТИ»')
 
-    # Элементы для таблицы — только те, что есть в нормах
-    cols = ["Образец", "C", "Si", "Mn", "Cr", "Ni", "Mo", "V", "Cu", "S", "P"]
+    cols = ["Образец"] + ELEMENTS_ORDER
     table = doc.add_table(rows=1, cols=len(cols))
     table.style = 'Table Grid'
 
     # Заголовок
-    hdr = table.rows[0].cells
     for i, c in enumerate(cols):
-        hdr[i].text = c
-        hdr[i].paragraphs[0].runs[0].font.name = 'Times New Roman'
+        table.rows[0].cells[i].text = c
+        table.rows[0].cells[i].paragraphs[0].runs[0].font.name = 'Times New Roman'
 
-    # Данные по образцам
+    # Данные
     for sample in samples:
         row = table.add_row().cells
         row[0].text = sample["name"]
         row[0].paragraphs[0].runs[0].font.name = 'Times New Roman'
-        for j, elem in enumerate(cols[1:], start=1):
+        for j, elem in enumerate(ELEMENTS_ORDER, start=1):
             val = sample["elements"].get(elem)
             if val is not None:
                 txt = format_value(val, elem)
                 row[j].text = txt
                 row[j].paragraphs[0].runs[0].font.name = 'Times New Roman'
-                # Цвет
-                nmin, nmax = NORMS_12X1MF[elem]
-                if evaluate_status_simple(val, nmin, nmax) == "🔴":
+                nmin, nmax = NORMS[elem]
+                if evaluate_status(val, nmin, nmax) == "🔴":
                     shading = OxmlElement('w:shd')
                     shading.set(qn('w:fill'), 'ffcccc')
                     row[j]._element.get_or_add_tcPr().append(shading)
@@ -154,26 +150,26 @@ def create_word_report(samples):
     req_row = table.add_row().cells
     req_row[0].text = "Требования ТУ 14-3Р-55-2001 [3] для стали марки 12Х1МФ"
     req_row[0].paragraphs[0].runs[0].font.name = 'Times New Roman'
-    for j, elem in enumerate(cols[1:], start=1):
-        nmin, nmax = NORMS_12X1MF[elem]
+    for j, elem in enumerate(ELEMENTS_ORDER, start=1):
+        nmin, nmax = NORMS[elem]
         req_row[j].text = format_norm(nmin, nmax)
         req_row[j].paragraphs[0].runs[0].font.name = 'Times New Roman'
 
-    # Анализ
+    # Выводы
     doc.add_heading('Выводы', level=1)
-    for sample in samples:
-        doc.add_heading(sample["name"], level=2)
-        for elem in cols[1:]:
-            val = sample["elements"].get(elem)
+    for s in samples:
+        doc.add_heading(s["name"], level=2)
+        for elem in ELEMENTS_ORDER:
+            val = s["elements"].get(elem)
             if val is not None:
-                nmin, nmax = NORMS_12X1MF[elem]
-                status = evaluate_status_simple(val, nmin, nmax)
+                nmin, nmax = NORMS[elem]
+                status = evaluate_status(val, nmin, nmax)
                 if status == "🔴":
                     doc.add_paragraph(f"🔴 {elem} = {format_value(val, elem)} — не соответствует норме ({format_norm(nmin, nmax)})")
                 else:
                     doc.add_paragraph(f"✅ {elem} = {format_value(val, elem)} — соответствует норме")
-        if sample["notes"]:
-            doc.add_paragraph(f"📌 Примечание: {sample['notes']}")
+        if s["notes"]:
+            doc.add_paragraph(f"📌 Примечание: {s['notes']}")
 
     doc.add_heading('Легенда', level=1)
     doc.add_paragraph("🔴 — несоответствие нормам\n✅ — соответствие нормам")
@@ -181,7 +177,7 @@ def create_word_report(samples):
     return doc
 
 # ================================
-# Streamlit UI
+# Streamlit
 # ================================
 st.set_page_config(page_title="Анализ химсостава", layout="wide")
 st.title("Анализ химического состава металла")
@@ -193,49 +189,44 @@ if uploaded:
         samples = parse_protocol_docx(uploaded)
         st.success(f"Загружено образцов: {len(samples)}")
 
-        # Подготовка данных для таблицы
+        # Подготовка данных
         data = []
         for s in samples:
             row = {"Образец": s["name"]}
-            for elem in ["C", "Si", "Mn", "Cr", "Ni", "Mo", "V", "Cu", "S", "P"]:
+            for elem in ELEMENTS_ORDER:
                 val = s["elements"].get(elem)
-                if val is not None:
-                    row[elem] = format_value(val, elem)
-                else:
-                    row[elem] = "–"
+                row[elem] = format_value(val, elem) if val is not None else "–"
             data.append(row)
 
         df = pd.DataFrame(data)
-        cols_order = ["Образец", "C", "Si", "Mn", "Cr", "Ni", "Mo", "V", "Cu", "S", "P"]
+        cols_order = ["Образец"] + ELEMENTS_ORDER
         df = df[cols_order]
 
         # HTML-таблица
         html_rows = ["<tr>" + "".join(f"<th style='font-family: Times New Roman;'>{c}</th>" for c in cols_order) + "</tr>"]
         for _, r in df.iterrows():
             row_html = f"<td style='font-family: Times New Roman;'>{r['Образец']}</td>"
-            for elem in cols_order[1:]:
+            for elem in ELEMENTS_ORDER:
                 val_str = r[elem]
-                val_num = None
-                try:
-                    val_num = float(val_str.replace(",", "."))
-                except:
-                    pass
-
-                if val_num is not None:
-                    nmin, nmax = NORMS_12X1MF[elem]
-                    status = evaluate_status_simple(val_num, nmin, nmax)
-                    if status == "🔴":
-                        row_html += f'<td style="background-color:#ffcccc; font-family: Times New Roman;">{val_str}</td>'
-                    else:
-                        row_html += f'<td style="font-family: Times New Roman;">{val_str}</td>'
-                else:
+                if val_str == "–":
                     row_html += f'<td style="font-family: Times New Roman;">{val_str}</td>'
+                else:
+                    try:
+                        val_num = float(val_str.replace(",", "."))
+                        nmin, nmax = NORMS[elem]
+                        status = evaluate_status(val_num, nmin, nmax)
+                        if status == "🔴":
+                            row_html += f'<td style="background-color:#ffcccc; font-family: Times New Roman;">{val_str}</td>'
+                        else:
+                            row_html += f'<td style="font-family: Times New Roman;">{val_str}</td>'
+                    except:
+                        row_html += f'<td style="font-family: Times New Roman;">{val_str}</td>'
             html_rows.append("<tr>" + row_html + "</tr>")
 
         # Строка требований
         req_cells = ["Требования ТУ 14-3Р-55-2001 [3] для стали марки 12Х1МФ"]
-        for elem in cols_order[1:]:
-            nmin, nmax = NORMS_12X1MF[elem]
+        for elem in ELEMENTS_ORDER:
+            nmin, nmax = NORMS[elem]
             req_cells.append(format_norm(nmin, nmax))
         req_row = "<tr>" + "".join(f"<td style='font-family: Times New Roman;'>{c}</td>" for c in req_cells) + "</tr>"
         html_rows.append(req_row)
@@ -244,7 +235,7 @@ if uploaded:
         st.markdown("### Сводная таблица (копируйте в Word):")
         st.markdown(html_table, unsafe_allow_html=True)
 
-        # Экспорт в Word
+        # Экспорт
         if st.button("📥 Скачать отчёт в Word"):
             doc = create_word_report(samples)
             bio = io.BytesIO()
@@ -260,11 +251,11 @@ if uploaded:
         st.subheader("Детальный анализ")
         for s in samples:
             with st.expander(f"🔍 {s['name']}"):
-                for elem in ["C", "Si", "Mn", "Cr", "Ni", "Mo", "V", "Cu", "S", "P"]:
+                for elem in ELEMENTS_ORDER:
                     val = s["elements"].get(elem)
                     if val is not None:
-                        nmin, nmax = NORMS_12X1MF[elem]
-                        status = evaluate_status_simple(val, nmin, nmax)
+                        nmin, nmax = NORMS[elem]
+                        status = evaluate_status(val, nmin, nmax)
                         if status == "🔴":
                             st.error(f"{elem} = {format_value(val, elem)} — не соответствует норме ({format_norm(nmin, nmax)})")
                         else:
@@ -273,6 +264,6 @@ if uploaded:
                     st.info(f"📌 Примечание: {s['notes']}")
 
     except Exception as e:
-        st.error(f"Ошибка при обработке файла: {e}")
+        st.error(f"Ошибка: {e}")
 else:
     st.info("Загрузите файл протокола в формате .docx")
