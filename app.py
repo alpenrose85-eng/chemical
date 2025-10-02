@@ -3,8 +3,8 @@ import pandas as pd
 from docx import Document
 import re
 import io
-from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
 from docx.shared import Pt
 
 # Нормы для 12Х1МФ (ТУ 14-3Р-55-2001)
@@ -24,6 +24,7 @@ NORMS_12X1MF = {
 def parse_protocol_docx(file):
     doc = Document(file)
     full_text = "\n".join([p.text for p in doc.paragraphs])
+    # Разделяем по заголовкам "Наименование образца"
     blocks = re.split(r"Наименование образца\s*:", full_text)[1:]
     tables = doc.tables
     samples = []
@@ -35,7 +36,7 @@ def parse_protocol_docx(file):
             continue
         sample_name = lines[0]
 
-        # 🔍 Извлекаем марку стали: "12Х1МФ" (игнорируем запятые и примечания)
+        # 🔧 Извлекаем марку стали: "12Х1МФ" (игнорируем запятые и примечания)
         steel_match = re.search(r"марке стали:\s*([А-Яа-я0-9Хх]+)", block)
         steel = steel_match.group(1).strip() if steel_match else "Неизвестно"
 
@@ -44,10 +45,9 @@ def parse_protocol_docx(file):
         if table_idx + 1 >= len(tables):
             break
 
-        def extract_means(table):
-            # Заголовки (пропускаем первую пустую ячейку)
+        def extract_means_from_table(table):
             headers = []
-            for cell in table.rows[0].cells[1:]:
+            for cell in table.rows[0].cells[1:]:  # Пропускаем первую пустую ячейку
                 h = cell.text.strip().replace("\n", "").replace("%", "").strip()
                 if h:
                     headers.append(h)
@@ -65,10 +65,12 @@ def parse_protocol_docx(file):
                     break  # Берём только ПЕРВУЮ строку "Среднее:"
             return means
 
-        means1 = extract_means(tables[table_idx])
-        means2 = extract_means(tables[table_idx + 1])
+        # Парсим две таблицы подряд
+        means1 = extract_means_from_table(tables[table_idx])
+        means2 = extract_means_from_table(tables[table_idx + 1])
         table_idx += 2
 
+        # Объединяем значения из двух таблиц
         all_means = {**means1, **means2}
         samples.append({
             "name": sample_name,
@@ -88,7 +90,12 @@ def evaluate_status_simple(value, norm_min, norm_max):
     return ""  # Соответствует
 
 def format_value(val, elem):
-    return f"{val:.3f}" if elem in ["S", "P"] else f"{val:.2f}"
+    if elem in ["S", "P"]:
+        return f"{val:.3f}".replace(".", ",")
+    elif elem == "Cu":
+        return f"{val:.2f}".replace(".", ",")  # Округляем медь до сотых
+    else:
+        return f"{val:.2f}".replace(".", ",")
 
 def format_norm(norm_min, norm_max):
     if norm_min is None:
@@ -111,7 +118,7 @@ def create_word_report(samples):
     doc.add_heading('Отчёт по химическому составу металла', 0)
     doc.add_paragraph('Источник: Протокол № 27/05 от 26.05.2025, ОАО «ВТИ»')
 
-    # Элементы для таблицы — только нормируемые
+    # Элементы для таблицы — только те, что есть в нормах
     cols = ["Образец", "C", "Si", "Mn", "Cr", "Ni", "Mo", "V", "Cu", "S", "P"]
     table = doc.add_table(rows=1, cols=len(cols))
     table.style = 'Table Grid'
