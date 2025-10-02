@@ -69,7 +69,6 @@ BASE_STEEL_NORMS = {
     }
 }
 
-# Инициализация сессии
 if "steel_norms" not in st.session_state:
     st.session_state.steel_norms = BASE_STEEL_NORMS.copy()
 
@@ -77,8 +76,6 @@ if "steel_norms" not in st.session_state:
 # ПАРСЕР ТАБЛИЦЫ
 # ================================
 def parse_table(table):
-    """Извлекает средние значения и погрешности из таблицы."""
-    # Заголовки — первая строка
     headers = []
     for cell in table.rows[0].cells:
         txt = cell.text.strip().replace("\n", "").replace("%", "").strip()
@@ -121,12 +118,10 @@ def parse_protocol_docx(file):
     samples = []
     tables = doc.tables
 
-    # Индекс текущей таблицы
     table_idx = 0
-
-    for block in blocks[1:]:  # Первый блок — до первого образца
+    for block in blocks[1:]:
         lines = block.strip().split("\n")
-        if not lines:
+        if not lines or not lines[0].strip():
             continue
         sample_name = lines[0].strip()
 
@@ -146,7 +141,6 @@ def parse_protocol_docx(file):
         table2 = tables[table_idx + 1]
         table_idx += 2
 
-        # Парсим таблицы
         elements1 = parse_table(table1)
         elements2 = parse_table(table2)
         all_elements = {**elements1, **elements2}
@@ -185,10 +179,12 @@ def create_word_report(all_samples, steel_norms):
     doc.add_heading('Отчёт по химическому составу металла', 0)
     doc.add_paragraph('Источник: загруженные протоколы лаборатории')
 
-    # Все нормируемые элементы
+    # Собираем все нормируемые элементы из всех используемых марок
+    used_steels = {s["steel"] for s in all_samples}
     norm_elements = set()
-    for norms in steel_norms.values():
-        norm_elements.update(norms.keys())
+    for steel in used_steels:
+        if steel in steel_norms:
+            norm_elements.update(steel_norms[steel].keys())
     norm_elements = sorted(norm_elements, key=lambda x: ["C", "Si", "Mn", "Cr", "Ni", "Mo", "V", "Cu", "S", "P"].index(x) if x in ["C", "Si", "Mn", "Cr", "Ni", "Mo", "V", "Cu", "S", "P"] else 999)
 
     # Таблица
@@ -224,6 +220,23 @@ def create_word_report(all_samples, steel_norms):
                     row_cells[j]._element.get_or_add_tcPr().append(shading)
             else:
                 row_cells[j].text = "–"
+
+    # Строка норм — только для реально встреченных марок
+    norm_row = table.add_row().cells
+    norm_row[0].text = "Нормы"
+    for j, elem in enumerate(norm_elements, start=1):
+        parts = []
+        for sample in all_samples:
+            steel = sample["steel"]
+            if steel in steel_norms and elem in steel_norms[steel]:
+                nmin, nmax = steel_norms[steel][elem]
+                if nmin is None:
+                    parts.append(f"{steel}: ≤{nmax}")
+                elif nmax is None:
+                    parts.append(f"{steel}: ≥{nmin}")
+                else:
+                    parts.append(f"{steel}: {nmin}–{nmax}")
+        norm_row[j].text = "; ".join(parts) if parts else "–"
 
     # Детальный анализ
     doc.add_heading('Детальный анализ', level=1)
@@ -324,9 +337,11 @@ if not rows:
     st.stop()
 
 # Сводная таблица (HTML)
+used_steels = {s["steel"] for s in all_samples}
 norm_elements = set()
-for norms in st.session_state.steel_norms.values():
-    norm_elements.update(norms.keys())
+for steel in used_steels:
+    if steel in st.session_state.steel_norms:
+        norm_elements.update(st.session_state.steel_norms[steel].keys())
 norm_elements = sorted(norm_elements, key=lambda x: ["C", "Si", "Mn", "Cr", "Ni", "Mo", "V", "Cu", "S", "P"].index(x) if x in ["C", "Si", "Mn", "Cr", "Ni", "Mo", "V", "Cu", "S", "P"] else 999)
 
 df_display = pd.DataFrame(rows)
@@ -355,20 +370,21 @@ for _, r in df_display.iterrows():
                 row_html += f"<td>{txt}</td>"
     html_rows.append("<tr>" + row_html + "</tr>")
 
-# Строка норм
+# Строка норм — только для реально используемых марок
 norm_row_html = "<tr><td><b>Нормы</b></td>"
 for elem in cols_order[1:]:
-    all_ranges = []
-    for steel, norms in st.session_state.steel_norms.items():
-        if elem in norms:
-            nmin, nmax = norms[elem]
+    parts = []
+    for sample in all_samples:
+        steel = sample["steel"]
+        if steel in st.session_state.steel_norms and elem in st.session_state.steel_norms[steel]:
+            nmin, nmax = st.session_state.steel_norms[steel][elem]
             if nmin is None:
-                all_ranges.append(f"{steel}: ≤{nmax}")
+                parts.append(f"{steel}: ≤{nmax}")
             elif nmax is None:
-                all_ranges.append(f"{steel}: ≥{nmin}")
+                parts.append(f"{steel}: ≥{nmin}")
             else:
-                all_ranges.append(f"{steel}: {nmin}–{nmax}")
-    norm_row_html += f"<td>{'; '.join(all_ranges) if all_ranges else '–'}</td>"
+                parts.append(f"{steel}: {nmin}–{nmax}")
+    norm_row_html += f"<td>{'; '.join(set(parts)) if parts else '–'}</td>"
 norm_row_html += "</tr>"
 html_rows.append(norm_row_html)
 
