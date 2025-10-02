@@ -1,3 +1,10 @@
+from flask import Flask, render_template_string
+
+app = Flask(__name__)
+
+@app.route('/')
+def index():
+    html_template = '''
 <!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -285,3 +292,8 @@
     </div>
 </body>
 </html>
+'''
+    return render_template_string(html_template)
+
+if __name__ == '__main__':
+    app.run(debug=True)
