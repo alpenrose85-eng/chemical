@@ -1,369 +1,378 @@
 import streamlit as st
 import pandas as pd
 from docx import Document
-import re
+import json
+import os
+from datetime import datetime
 import io
-from docx.oxml.ns import qn
-from docx.oxml import OxmlElement
-from docx.shared import Pt
-from docx.oxml.text.paragraph import CT_P
-from docx.oxml.table import CT_Tbl
-from docx.text.paragraph import Paragraph
-from docx.table import Table
-from docx.document import Document as DocxDocumentClass
+from docx.shared import Inches
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+import re
 
-# Нормы для сталей
-NORMS = {
-    "12Х1МФ": {
-        "C": (0.10, 0.15),
-        "Si": (0.17, 0.27),
-        "Mn": (0.40, 0.70),
-        "Cr": (0.90, 1.20),
-        "Ni": (None, 0.25),
-        "Mo": (0.25, 0.35),
-        "V": (0.15, 0.30),
-        "Cu": (None, 0.20),
-        "S": (None, 0.025),
-        "P": (None, 0.025)
-    },
-    "12Х18Н12Т": {
-        "C": (None, 0.12),
-        "Si": (None, 0.80),
-        "Mn": (1.00, 2.00),
-        "Cr": (17.00, 19.00),
-        "Ni": (11.00, 13.00),
-        "Ti": (None, 0.7),
-        "Cu": (None, 0.30),
-        "S": (None, 0.020),
-        "P": (None, 0.035)
-    }
-}
-
-# Элементы для каждой стали
-ELEMENTS_BY_STEEL = {
-    "12Х1МФ": ["C", "Si", "Mn", "Cr", "Ni", "Mo", "V", "Cu", "S", "P"],
-    "12Х18Н12Т": ["C", "Si", "Mn", "Cr", "Ni", "Ti", "Cu", "S", "P"]
-}
-
-# ================================
-# Вспомогательные функции
-# ================================
-
-def iter_block_items(parent):
-    """Итератор по элементам документа (параграфы и таблицы в порядке следования)."""
-    if isinstance(parent, DocxDocumentClass):
-        parent_elm = parent.element.body
-    else:
-        raise ValueError("parent must be a Document instance")
-    for child in parent_elm.iterchildren():
-        if isinstance(child, CT_P):
-            yield Paragraph(child, parent)
-        elif isinstance(child, CT_Tbl):
-            yield Table(child, parent)
-
-def extract_means_from_table(table):
-    """Извлекает средние значения из одной таблицы."""
-    means = {}
-    headers = []
-
-    for i, row in enumerate(table.rows):
-        first_cell = row.cells[0].text.strip()
-        first_cell_clean = re.sub(r'\s+', ' ', first_cell).strip()
-
-        # Определяем заголовки: строка, где первая ячейка пустая или "-", остальные — буквы
-        if not first_cell_clean or first_cell_clean == "-":
-            headers = []
-            for cell in row.cells[1:]:
-                h = re.sub(r'\s+', ' ', cell.text).replace('%', '').strip()
-                if h and not h.replace('.', '').replace(',', '').isdigit() and not h.startswith(('±', '1', '2', '3', 'Среднее')):
-                    headers.append(h)
-
-        # Извлекаем строку "Среднее:" (но не погрешности)
-        if "Среднее:" in first_cell_clean and not first_cell_clean.startswith("Среднее: ±"):
-            for j, cell in enumerate(row.cells[1:], start=0):
-                val_text = re.sub(r'\s+', ' ', cell.text).strip()
-                if val_text and not val_text.startswith(('±', '-')) and j < len(headers):
-                    try:
-                        val = float(val_text.replace(',', '.'))
-                        elem = headers[j]
-                        means[elem] = val
-                    except ValueError:
-                        continue
-    return means
-
-def parse_protocol_docx(file):
-    doc = Document(file)
-    samples = []
-    current_sample_name = None
-    current_steel = None
-    table_buffer = []  # Буфер для хранения таблиц текущего образца
-
-    for block in iter_block_items(doc):
-        if isinstance(block, Paragraph):
-            para_text = block.text.strip()
-            if "Наименование образца :" in para_text:
-                # Сохраняем предыдущий образец, если есть данные
-                if current_sample_name and len(table_buffer) >= 2:
-                    means1 = extract_means_from_table(table_buffer[0])
-                    means2 = extract_means_from_table(table_buffer[1])
-                    all_means = {**means1, **means2}
-                    notes = "с учетом допустимых отклонений" if "с учетом допустимых отклонений" in para_text else ""
-                    samples.append({
-                        "name": current_sample_name,
-                        "steel": current_steel,
-                        "elements": all_means,
-                        "notes": notes
-                    })
-                # Сбрасываем буфер
-                table_buffer = []
-                # Начинаем новый образец
-                current_sample_name = para_text.split("Наименование образца :")[-1].strip()
-                # Ищем марку стали
-                steel_match = re.search(r"марке стали:\s*([А-Яа-я0-9Хх]+)", para_text)
-                if steel_match:
-                    current_steel = steel_match.group(1).strip()
-                else:
-                    current_steel = "Неизвестно"
-        elif isinstance(block, Table):
-            if current_sample_name:
-                table_buffer.append(block)
-                if len(table_buffer) == 2:
-                    means1 = extract_means_from_table(table_buffer[0])
-                    means2 = extract_means_from_table(table_buffer[1])
-                    all_means = {**means1, **means2}
-                    # Проверка на примечание в текущем параграфе
-                    notes = "с учетом допустимых отклонений" if "с учетом допустимых отклонений" in current_sample_name or any("с учетом допустимых отклонений" in p.text for p in doc.paragraphs if current_sample_name in p.text) else ""
-                    samples.append({
-                        "name": current_sample_name,
-                        "steel": current_steel,
-                        "elements": all_means,
-                        "notes": notes
-                    })
-                    current_sample_name = None
-                    current_steel = None
-                    table_buffer = []
-
-    # Обработка последнего образца
-    if current_sample_name and len(table_buffer) >= 2:
-        means1 = extract_means_from_table(table_buffer[0])
-        means2 = extract_means_from_table(table_buffer[1])
-        all_means = {**means1, **means2}
-        notes = "с учетом допустимых отклонений" if "с учетом допустимых отклонений" in current_sample_name else ""
-        samples.append({
-            "name": current_sample_name,
-            "steel": current_steel,
-            "elements": all_means,
-            "notes": notes
-        })
-
-    return samples
-
-# ================================
-# Остальной код (без изменений)
-# ================================
-
-def evaluate_status(value, norm_min, norm_max):
-    if norm_min is not None and value < norm_min:
-        return "🔴"
-    if norm_max is not None and value > norm_max:
-        return "🔴"
-    return ""
-
-def format_value(val, elem):
-    if elem in ["S", "P"]:
-        return f"{val:.3f}".replace(".", ",")
-    else:
-        return f"{val:.2f}".replace(".", ",")
-
-def format_norm(norm_min, norm_max):
-    if norm_min is None:
-        return f"≤{norm_max:.2f}".replace(".", ",")
-    elif norm_max is None:
-        return f"≥{norm_min:.2f}".replace(".", ",")
-    else:
-        return f"{norm_min:.2f}–{norm_max:.2f}".replace(".", ",")
-
-def create_word_report_for_steel(samples, steel):
-    doc = Document()
-    style = doc.styles['Normal']
-    font = style.font
-    font.name = 'Times New Roman'
-    font.size = Pt(12)
-
-    doc.add_heading(f'Отчёт по химическому составу металла — сталь {steel}', 0)
-    doc.add_paragraph('Источник: Протокол № 46/10 от 02.10.2025, ОАО «ВТИ»')
-
-    elements = ELEMENTS_BY_STEEL.get(steel, [])
-    if not elements:
-        doc.add_paragraph("Для этой стали нет нормативов")
-        return doc
-
-    cols = ["Образец"] + elements
-    table = doc.add_table(rows=1, cols=len(cols))
-    table.style = 'Table Grid'
-
-    for i, c in enumerate(cols):
-        table.rows[0].cells[i].text = c
-        table.rows[0].cells[i].paragraphs[0].runs[0].font.name = 'Times New Roman'
-
-    for sample in samples:
-        if sample["steel"] != steel:
-            continue
-        row = table.add_row().cells
-        row[0].text = sample["name"]
-        row[0].paragraphs[0].runs[0].font.name = 'Times New Roman'
-        for j, elem in enumerate(elements, start=1):
-            val = sample["elements"].get(elem)
-            cell = row[j]
-            if val is not None:
-                txt = format_value(val, elem)
-                cell.text = txt
-                status = evaluate_status(val, *NORMS[steel][elem])
-                if status == "🔴":
-                    shading = OxmlElement('w:shd')
-                    shading.set(qn('w:fill'), 'ffcccc')
-                    cell._element.get_or_add_tcPr().append(shading)
-            else:
-                cell.text = "–"
-            cell.paragraphs[0].runs[0].font.name = 'Times New Roman'
-
-    req_row = table.add_row().cells
-    req_row[0].text = f"Требования ТУ 14-3Р-55-2001 [3] для стали марки {steel}"
-    req_row[0].paragraphs[0].runs[0].font.name = 'Times New Roman'
-    for j, elem in enumerate(elements, start=1):
-        nmin, nmax = NORMS[steel][elem]
-        req_row[j].text = format_norm(nmin, nmax)
-        req_row[j].paragraphs[0].runs[0].font.name = 'Times New Roman'
-
-    doc.add_heading('Выводы', level=1)
-    for s in samples:
-        if s["steel"] != steel:
-            continue
-        doc.add_heading(s["name"], level=2)
-        for elem in elements:
-            val = s["elements"].get(elem)
-            if val is not None:
-                nmin, nmax = NORMS[steel][elem]
-                status = evaluate_status(val, nmin, nmax)
-                if status == "🔴":
-                    doc.add_paragraph(f"🔴 {elem} = {format_value(val, elem)} — не соответствует норме ({format_norm(nmin, nmax)})")
-                else:
-                    doc.add_paragraph(f"✅ {elem} = {format_value(val, elem)} — соответствует норме")
-        if s["notes"]:
-            doc.add_paragraph(f"📌 Примечание: {s['notes']}")
-
-    doc.add_heading('Легенда', level=1)
-    doc.add_paragraph("🔴 — несоответствие нормам\n✅ — соответствие нормам")
-
-    return doc
-
-# ================================
-# Streamlit UI
-# ================================
-st.set_page_config(page_title="Анализ химсостава", layout="wide")
-st.title("Анализ химического состава металла")
-
-uploaded_files = st.file_uploader("Загрузите протоколы (.docx)", type=["docx"], accept_multiple_files=True)
-
-if uploaded_files:
-    all_samples = []
-    for file in uploaded_files:
+class ChemicalAnalyzer:
+    def __init__(self):
+        self.load_standards()
+        
+    def load_standards(self):
+        """Загрузка стандартов из предустановленных файлов"""
+        self.standards = {
+            "12Х1МФ": {
+                "C": (0.08, 0.15),
+                "Si": (0.17, 0.37),
+                "Mn": (0.40, 0.70),
+                "Cr": (0.90, 1.20),
+                "Mo": (0.25, 0.35),
+                "V": (0.15, 0.30),
+                "Cu": (None, 0.30),
+                "S": (None, 0.025),
+                "P": (None, 0.030),
+                "Ni": (None, 0.30),
+                "source": "ТУ 14-3Р-55-2001"
+            },
+            "12Х18Н12Т": {
+                "C": (None, 0.12),
+                "Si": (None, 0.80),
+                "Mn": (1.00, 2.00),
+                "Cr": (17.00, 19.00),
+                "Ni": (11.00, 13.00),
+                "Ti": (None, 0.70),
+                "Cu": (None, 0.30),
+                "S": (None, 0.020),
+                "P": (None, 0.035),
+                "source": "ГОСТ 5632-2014"
+            },
+            "сталь 20": {
+                "C": (0.17, 0.24),
+                "Si": (0.17, 0.37),
+                "Mn": (0.35, 0.65),
+                "Cr": (None, 0.25),
+                "Ni": (None, 0.25),
+                "Cu": (None, 0.30),
+                "P": (None, 0.030),
+                "S": (None, 0.025),
+                "source": "ГОСТ 1050-2013"
+            }
+        }
+        
+        # Загрузка пользовательских стандартов если есть
+        if os.path.exists("user_standards.json"):
+            with open("user_standards.json", "r", encoding="utf-8") as f:
+                user_std = json.load(f)
+                self.standards.update(user_std)
+    
+    def save_user_standards(self):
+        """Сохранение пользовательских стандартов"""
+        with open("user_standards.json", "w", encoding="utf-8") as f:
+            json.dump({k: v for k, v in self.standards.items() 
+                      if k not in ["12Х1МФ", "12Х18Н12Т", "сталь 20"]}, f, ensure_ascii=False)
+    
+    def parse_protocol_file(self, file_content):
+        """Парсинг файла протокола"""
         try:
-            samples = parse_protocol_docx(file)
-            all_samples.extend(samples)
+            doc = Document(io.BytesIO(file_content))
+            samples = []
+            current_sample = None
+            
+            for paragraph in doc.paragraphs:
+                text = paragraph.text.strip()
+                
+                # Поиск названия образца
+                if "Наименование образца:" in text:
+                    sample_name = text.split("Наименование образца:")[1].strip()
+                    current_sample = {
+                        "name": sample_name,
+                        "steel_grade": None,
+                        "composition": {}
+                    }
+                    samples.append(current_sample)
+                
+                # Поиск марки стали
+                elif "Химический состав металла образца соответствует марке стали:" in text:
+                    if current_sample:
+                        # Извлечение марки стали (убираем лишние символы)
+                        grade_text = text.split("марке стали:")[1].strip()
+                        # Удаляем возможные ** вокруг марки стали
+                        grade_text = re.sub(r'\*+', '', grade_text).strip()
+                        current_sample["steel_grade"] = grade_text
+            
+            # Парсинг таблиц с химическим составом
+            for i, table in enumerate(doc.tables):
+                if i < len(samples):
+                    composition = self.parse_composition_table(table)
+                    samples[i]["composition"] = composition
+            
+            return samples
+            
         except Exception as e:
-            st.error(f"Ошибка при обработке файла {file.name}: {e}")
-
-    if not all_samples:
-        st.info("Не удалось обработать ни один файл")
-        st.stop()
-
-    # Группируем по маркам сталей
-    steel_groups = {}
-    for s in all_samples:
-        steel = s["steel"]
-        if steel not in steel_groups:
-            steel_groups[steel] = []
-        steel_groups[steel].append(s)
-
-    # Выводим таблицы по каждой стали
-    for steel, group_samples in steel_groups.items():
-        st.subheader(f"Сталь: {steel}")
-        elements = ELEMENTS_BY_STEEL.get(steel, [])
-        if not elements:
-            st.warning("Для этой стали нет нормативов")
-            continue
-
-        data = []
-        for s in group_samples:
-            row = {"Образец": s["name"]}
-            for elem in elements:
-                val = s["elements"].get(elem)
-                row[elem] = format_value(val, elem) if val is not None else "–"
-            data.append(row)
-
-        df = pd.DataFrame(data)
-        cols_order = ["Образец"] + elements
-        df = df[cols_order]
-
-        html_rows = ["<tr>" + "".join(f"<th style='font-family: Times New Roman;'>{c}</th>" for c in cols_order) + "</tr>"]
-        for _, r in df.iterrows():
-            row_html = f"<td style='font-family: Times New Roman;'>{r['Образец']}</td>"
-            for elem in elements:
-                val_str = r[elem]
-                if val_str == "–":
-                    row_html += f'<td style="font-family: Times New Roman;">{val_str}</td>'
-                else:
-                    try:
-                        val_num = float(val_str.replace(",", "."))
-                        nmin, nmax = NORMS[steel][elem]
-                        status = evaluate_status(val_num, nmin, nmax)
-                        if status == "🔴":
-                            row_html += f'<td style="background-color:#ffcccc; font-family: Times New Roman;">{val_str}</td>'
+            st.error(f"Ошибка при парсинге файла: {str(e)}")
+            return []
+    
+    def parse_composition_table(self, table):
+        """Парсинг таблицы с химическим составом"""
+        composition = {}
+        
+        try:
+            # Поиск строки со средними значениями
+            for row in table.rows:
+                cells = [cell.text.strip() for cell in row.cells]
+                
+                # Ищем строку, начинающуюся с "Среднее:"
+                if cells and "Среднее:" in cells[0]:
+                    # Сопоставляем элементы со значениями
+                    elements = []
+                    values = []
+                    
+                    # Собираем заголовки элементов из предыдущих строк
+                    for prev_row in table.rows:
+                        prev_cells = [cell.text.strip() for cell in prev_row.cells]
+                        if prev_cells and prev_cells[0] in ["C", "Si", "Mn", "P", "S", "Cr", "Mo", "Ni", 
+                                                           "Cu", "Al", "Co", "Nb", "Ti", "V", "W", "Fe"]:
+                            elements = prev_cells
+                            break
+                    
+                    if elements:
+                        # Берем значения из текущей строки (пропускаем первый столбец "Среднее:")
+                        values = cells[1:len(elements)]
+                        
+                        for elem, val in zip(elements, values):
+                            if elem in ["C", "Si", "Mn", "P", "S", "Cr", "Mo", "Ni", 
+                                      "Cu", "Al", "Co", "Nb", "Ti", "V", "W", "Fe"]:
+                                try:
+                                    # Заменяем точку на запятую и преобразуем в float
+                                    num_val = float(val.replace(',', '.'))
+                                    composition[elem] = num_val
+                                except ValueError:
+                                    continue
+            
+            return composition
+            
+        except Exception as e:
+            st.error(f"Ошибка при парсинге таблицы: {str(e)}")
+            return {}
+    
+    def check_compliance(self, sample):
+        """Проверка соответствия нормативам"""
+        if not sample["steel_grade"] or sample["steel_grade"] not in self.standards:
+            return None
+        
+        standard = self.standards[sample["steel_grade"]]
+        deviations = []
+        borderlines = []
+        
+        for element, (min_val, max_val) in standard.items():
+            if element == "source":
+                continue
+                
+            if element in sample["composition"]:
+                actual_val = sample["composition"][element]
+                
+                # Проверка соответствия
+                if min_val is not None and actual_val < min_val:
+                    deviations.append(f"{element}: {actual_val:.3f} < {min_val:.3f}")
+                elif max_val is not None and actual_val > max_val:
+                    deviations.append(f"{element}: {actual_val:.3f} > {max_val:.3f}")
+                elif min_val is not None and actual_val <= min_val * 1.05:
+                    borderlines.append(f"{element}: {actual_val:.3f} близко к мин. {min_val:.3f}")
+                elif max_val is not None and actual_val >= max_val * 0.95:
+                    borderlines.append(f"{element}: {actual_val:.3f} близко к макс. {max_val:.3f}")
+        
+        return {
+            "deviations": deviations,
+            "borderlines": borderlines,
+            "is_compliant": len(deviations) == 0
+        }
+    
+    def create_report_table(self, samples):
+        """Создание сводной таблицы для отчета"""
+        if not samples:
+            return None
+        
+        # Собираем все уникальные марки стали
+        steel_grades = list(set(sample["steel_grade"] for sample in samples if sample["steel_grade"]))
+        
+        tables = {}
+        
+        for grade in steel_grades:
+            grade_samples = [s for s in samples if s["steel_grade"] == grade]
+            
+            if grade not in self.standards:
+                continue
+                
+            standard = self.standards[grade]
+            # Только нормируемые элементы
+            norm_elements = [elem for elem in standard.keys() if elem != "source"]
+            
+            # Создаем DataFrame
+            data = []
+            for sample in grade_samples:
+                row = {"Образец": sample["name"]}
+                for elem in norm_elements:
+                    if elem in sample["composition"]:
+                        # Округление согласно требованиям
+                        if elem in ["S", "P"]:
+                            row[elem] = f"{sample['composition'][elem]:.3f}".replace('.', ',')
                         else:
-                            row_html += f'<td style="font-family: Times New Roman;">{val_str}</td>'
-                    except:
-                        row_html += f'<td style="font-family: Times New Roman;">{val_str}</td>'
-            html_rows.append("<tr>" + row_html + "</tr>")
-
-        req_cells = [f"Требования ТУ 14-3Р-55-2001 [3] для стали марки {steel}"]
-        for elem in elements:
-            nmin, nmax = NORMS[steel][elem]
-            req_cells.append(format_norm(nmin, nmax))
-        req_row = "<tr>" + "".join(f"<td style='font-family: Times New Roman;'>{c}</td>" for c in req_cells) + "</tr>"
-        html_rows.append(req_row)
-
-        html_table = f'<table border="1" style="border-collapse:collapse; font-family: Times New Roman;">{"".join(html_rows)}</table>'
-        st.markdown("##### Сводная таблица (копируйте в Word):")
-        st.markdown(html_table, unsafe_allow_html=True)
-
-        if st.button(f"📥 Скачать отчёт для стали {steel}", key=f"download_{steel}"):
-            doc = create_word_report_for_steel(group_samples, steel)
-            bio = io.BytesIO()
-            doc.save(bio)
-            st.download_button(
-                label=f"Скачать отчёт_{steel}.docx",
-                data=bio.getvalue(),
-                file_name=f"Отчёт_химсостав_{steel}.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            )
-
-    # Детальный анализ
-    st.subheader("Детальный анализ")
-    for s in all_samples:
-        with st.expander(f"🔍 {s['name']} ({s['steel']})"):
-            elements = ELEMENTS_BY_STEEL.get(s["steel"], [])
-            for elem in elements:
-                val = s["elements"].get(elem)
-                if val is not None:
-                    nmin, nmax = NORMS[s["steel"]][elem]
-                    status = evaluate_status(val, nmin, nmax)
-                    if status == "🔴":
-                        st.error(f"{elem} = {format_value(val, elem)} — не соответствует норме ({format_norm(nmin, nmax)})")
+                            row[elem] = f"{sample['composition'][elem]:.2f}".replace('.', ',')
                     else:
-                        st.success(f"{elem} = {format_value(val, elem)} — соответствует норме")
-            if s["notes"]:
-                st.info(f"📌 Примечание: {s['notes']}")
+                        row[elem] = "-"
+                data.append(row)
+            
+            # Добавляем строку с нормативами
+            requirements_row = {"Образец": f"Требования {standard.get('source', '')} для стали марки {grade}"}
+            for elem in norm_elements:
+                min_val, max_val = standard[elem]
+                if min_val is not None and max_val is not None:
+                    requirements_row[elem] = f"{min_val:.2f}-{max_val:.2f}".replace('.', ',')
+                elif min_val is not None:
+                    requirements_row[elem] = f">={min_val:.2f}".replace('.', ',')
+                elif max_val is not None:
+                    requirements_row[elem] = f"<={max_val:.2f}".replace('.', ',')
+                else:
+                    requirements_row[elem] = "не нормируется"
+            
+            data.append(requirements_row)
+            
+            tables[grade] = pd.DataFrame(data)
+        
+        return tables
 
-else:
-    st.info("Загрузите файлы протоколов в формате .docx")
+def main():
+    st.set_page_config(page_title="Анализатор химсостава металла", layout="wide")
+    st.title("🔬 Анализатор химического состава металла")
+    
+    analyzer = ChemicalAnalyzer()
+    
+    # Сайдбар для управления нормативами
+    with st.sidebar:
+        st.header("Управление нормативами")
+        
+        # Добавление нового норматива
+        st.subheader("Добавить новую марку стали")
+        new_grade = st.text_input("Марка стали")
+        new_source = st.text_input("Нормативный документ")
+        
+        if new_grade:
+            st.write("Укажите диапазоны для элементов (оставьте пустым если не нормируется):")
+            col1, col2 = st.columns(2)
+            elements_ranges = {}
+            
+            with col1:
+                for elem in ["C", "Si", "Mn", "Cr", "Ni", "Mo"]:
+                    min_val = st.number_input(f"{elem} мин", value=0.0, format="%.3f", key=f"min_{elem}")
+                    max_val = st.number_input(f"{elem} макс", value=0.0, format="%.3f", key=f"max_{elem}")
+                    if min_val > 0 or max_val > 0:
+                        elements_ranges[elem] = (min_val if min_val > 0 else None, 
+                                               max_val if max_val > 0 else None)
+            
+            with col2:
+                for elem in ["V", "Cu", "S", "P", "Ti"]:
+                    min_val = st.number_input(f"{elem} мин", value=0.0, format="%.3f", key=f"min_{elem}2")
+                    max_val = st.number_input(f"{elem} макс", value=0.0, format="%.3f", key=f"max_{elem}2")
+                    if min_val > 0 or max_val > 0:
+                        elements_ranges[elem] = (min_val if min_val > 0 else None, 
+                                               max_val if max_val > 0 else None)
+            
+            if st.button("Сохранить норматив") and new_grade:
+                analyzer.standards[new_grade] = elements_ranges
+                analyzer.standards[new_grade]["source"] = new_source
+                analyzer.save_user_standards()
+                st.success(f"Норматив для {new_grade} сохранен!")
+    
+    # Основная область для загрузки файлов
+    st.header("Загрузка протоколов")
+    
+    uploaded_files = st.file_uploader(
+        "Выберите файлы протоколов (.docx)", 
+        type=["docx"], 
+        accept_multiple_files=True
+    )
+    
+    all_samples = []
+    
+    if uploaded_files:
+        for uploaded_file in uploaded_files:
+            st.write(f"**Обработка файла:** {uploaded_file.name}")
+            
+            samples = analyzer.parse_protocol_file(uploaded_file.getvalue())
+            all_samples.extend(samples)
+            
+            for sample in samples:
+                st.write(f"- Образец: {sample['name']}, Марка стали: {sample['steel_grade']}")
+        
+        # Анализ и отображение результатов
+        if all_samples:
+            st.header("Результаты анализа")
+            
+            # Создание таблиц для отчета
+            report_tables = analyzer.create_report_table(all_samples)
+            
+            for grade, table in report_tables.items():
+                st.subheader(f"Марка стали: {grade}")
+                
+                # Отображение таблицы в Streamlit
+                st.dataframe(table)
+                
+                # Детальный анализ
+                st.write("**Детальный анализ:**")
+                grade_samples = [s for s in all_samples if s["steel_grade"] == grade]
+                
+                for sample in grade_samples:
+                    compliance = analyzer.check_compliance(sample)
+                    if compliance:
+                        if compliance["is_compliant"]:
+                            st.success(f"✅ {sample['name']} - Соответствует нормам")
+                        else:
+                            st.error(f"❌ {sample['name']} - Не соответствует нормам")
+                            
+                        if compliance["deviations"]:
+                            st.write("Отклонения:")
+                            for dev in compliance["deviations"]:
+                                st.write(f"  - {dev}")
+                        
+                        if compliance["borderlines"]:
+                            st.warning("Пограничные значения:")
+                            for border in compliance["borderlines"]:
+                                st.write(f"  - {border}")
+            
+            # Экспорт в Word
+            if st.button("📄 Экспорт в Word"):
+                create_word_report(report_tables, all_samples, analyzer)
+                st.success("Отчет готов к скачиванию!")
+
+def create_word_report(tables, samples, analyzer):
+    """Создание Word отчета"""
+    doc = Document()
+    
+    # Титульная страница
+    title = doc.add_heading('Протокол анализа химического состава', 0)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    
+    doc.add_paragraph(f"Дата формирования: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
+    doc.add_paragraph(f"Проанализировано образцов: {len(samples)}")
+    doc.add_paragraph("")
+    
+    # Добавляем таблицы для каждой марки стали
+    for grade, table_df in tables.items():
+        doc.add_heading(f'Марка стали: {grade}', level=1)
+        
+        # Создаем таблицу в Word
+        word_table = doc.add_table(rows=len(table_df)+1, cols=len(table_df.columns))
+        word_table.style = 'Table Grid'
+        
+        # Заголовки
+        for j, col in enumerate(table_df.columns):
+            word_table.cell(0, j).text = str(col)
+        
+        # Данные
+        for i, row in table_df.iterrows():
+            for j, col in enumerate(table_df.columns):
+                word_table.cell(i+1, j).text = str(row[col])
+        
+        doc.add_paragraph()
+    
+    # Сохраняем документ
+    doc.save("химический_анализ_отчет.docx")
+    st.success("Отчет сохранен как 'химический_анализ_отчет.docx'")
+
+if __name__ == "__main__":
+    main()
