@@ -293,14 +293,14 @@ class ChemicalAnalyzer:
                         requirements_row[elem] = f"{min_val:.2f}-{max_val:.2f}".replace('.', ',')
                 elif min_val is not None:
                     if elem in ["S", "P"]:
-                        requirements_row[elem] = f">={min_val:.3f}".replace('.', ',')
+                        requirements_row[elem] = f"≥{min_val:.3f}".replace('.', ',')
                     else:
-                        requirements_row[elem] = f">={min_val:.2f}".replace('.', ',')
+                        requirements_row[elem] = f"≥{min_val:.2f}".replace('.', ',')
                 elif max_val is not None:
                     if elem in ["S", "P"]:
-                        requirements_row[elem] = f"<={max_val:.3f}".replace('.', ',')
+                        requirements_row[elem] = f"≤{max_val:.3f}".replace('.', ',')
                     else:
-                        requirements_row[elem] = f"<={max_val:.2f}".replace('.', ',')
+                        requirements_row[elem] = f"≤{max_val:.2f}".replace('.', ',')
                 else:
                     requirements_row[elem] = "не нормируется"
                 
@@ -558,13 +558,13 @@ def main():
                 st.write("**Редактирование таблицы:**")
                 st.write("Измените номера в столбце '№' для изменения порядка образцов")
                 
-                # Инициализируем session_state для этой таблицы, если его нет
-                if f"edited_{grade}" not in st.session_state:
-                    st.session_state[f"edited_{grade}"] = table_data["data"].copy()
+                # Используем session_state для хранения отредактированных данных
+                if f"edited_data_{grade}" not in st.session_state:
+                    st.session_state[f"edited_data_{grade}"] = table_data["data"].copy()
                 
                 # Отображаем редактор данных
                 edited_df = st.data_editor(
-                    st.session_state[f"edited_{grade}"],
+                    st.session_state[f"edited_data_{grade}"],
                     key=f"editor_{grade}",
                     num_rows="fixed",
                     use_container_width=True,
@@ -585,8 +585,8 @@ def main():
                     }
                 )
                 
-                # Сохраняем изменения
-                st.session_state[f"edited_{grade}"] = edited_df
+                # Сохраняем изменения в session_state
+                st.session_state[f"edited_data_{grade}"] = edited_df
                 
                 # Переупорядочиваем образцы по номеру
                 reordered_df, reordered_compliance = reorder_samples_by_number(
@@ -603,8 +603,8 @@ def main():
                 # Используем отредактированные и переупорядоченные данные для экспорта
                 edited_tables = {}
                 for grade in report_tables.keys():
-                    if f"edited_{grade}" in st.session_state:
-                        edited_df = st.session_state[f"edited_{grade}"]
+                    if f"edited_data_{grade}" in st.session_state:
+                        edited_df = st.session_state[f"edited_data_{grade}"]
                         # Переупорядочиваем для экспорта
                         reordered_df, _ = reorder_samples_by_number(
                             edited_df, report_tables[grade]["compliance"]
