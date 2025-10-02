@@ -6,6 +6,11 @@ import io
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 from docx.shared import Pt
+from docx.oxml.text.paragraph import CT_P
+from docx.oxml.table import CT_Tbl
+from docx.text.paragraph import Paragraph
+from docx.table import Table
+from docx.document import Document as DocxDocumentClass
 
 # Нормы для сталей
 NORMS = {
@@ -40,16 +45,9 @@ ELEMENTS_BY_STEEL = {
     "12Х18Н12Т": ["C", "Si", "Mn", "Cr", "Ni", "Ti", "Cu", "S", "P"]
 }
 
-def parse_protocol_docx(file):
 # ================================
-# Исправленная функция parse_protocol_docx
+# Вспомогательные функции
 # ================================
-
-from docx.oxml.text.paragraph import CT_P
-from docx.oxml.table import CT_Tbl
-from docx.text.paragraph import Paragraph
-from docx.table import Table
-from docx.document import Document as DocxDocumentClass
 
 def iter_block_items(parent):
     """Итератор по элементам документа (параграфы и таблицы в порядке следования)."""
@@ -72,7 +70,7 @@ def extract_means_from_table(table):
         first_cell = row.cells[0].text.strip()
         first_cell_clean = re.sub(r'\s+', ' ', first_cell).strip()
 
-        # Определяем заголовки: строка, где первая ячейка пустая, а остальные — буквы
+        # Определяем заголовки: строка, где первая ячейка пустая или "-", остальные — буквы
         if not first_cell_clean or first_cell_clean == "-":
             headers = []
             for cell in row.cells[1:]:
@@ -120,41 +118,27 @@ def parse_protocol_docx(file):
                 table_buffer = []
                 # Начинаем новый образец
                 current_sample_name = para_text.split("Наименование образца :")[-1].strip()
-                # Ищем марку стали в этом же параграфе
+                # Ищем марку стали
                 steel_match = re.search(r"марке стали:\s*([А-Яа-я0-9Хх]+)", para_text)
                 if steel_match:
                     current_steel = steel_match.group(1).strip()
                 else:
                     current_steel = "Неизвестно"
-            elif current_sample_name and "с учетом допустимых отклонений" in para_text:
-                # Просто запоминаем, что для этого образца есть примечание
-                # (мы добавим его при создании образца)
-                pass
         elif isinstance(block, Table):
             if current_sample_name:
                 table_buffer.append(block)
-                # Если накопили 2 таблицы — обрабатываем
                 if len(table_buffer) == 2:
                     means1 = extract_means_from_table(table_buffer[0])
                     means2 = extract_means_from_table(table_buffer[1])
                     all_means = {**means1, **means2}
-                    # Проверяем, есть ли примечание в параграфах, относящихся к этому образцу
-                    notes = ""
-                    # Простой способ: проверяем, содержится ли текст "с учетом допустимых отклонений" в параграфе с именем образца
-                    # или в следующих параграфах до следующего образца
-                    # Для простоты, если в параграфе с именем образца есть примечание
-                    if "с учетом допустимых отклонений" in current_sample_name:
-                        notes = "с учетом допустимых отклонений"
-                    else:
-                        # Можно сделать более сложную проверку, но пока так
-                        pass
+                    # Проверка на примечание в текущем параграфе
+                    notes = "с учетом допустимых отклонений" if "с учетом допустимых отклонений" in current_sample_name or any("с учетом допустимых отклонений" in p.text for p in doc.paragraphs if current_sample_name in p.text) else ""
                     samples.append({
                         "name": current_sample_name,
                         "steel": current_steel,
                         "elements": all_means,
                         "notes": notes
                     })
-                    # Сбрасываем для следующего образца
                     current_sample_name = None
                     current_steel = None
                     table_buffer = []
@@ -173,6 +157,10 @@ def parse_protocol_docx(file):
         })
 
     return samples
+
+# ================================
+# Остальной код (без изменений)
+# ================================
 
 def evaluate_status(value, norm_min, norm_max):
     if norm_min is not None and value < norm_min:
@@ -195,9 +183,6 @@ def format_norm(norm_min, norm_max):
     else:
         return f"{norm_min:.2f}–{norm_max:.2f}".replace(".", ",")
 
-# ================================
-# Генерация Word-отчёта для одной стали
-# ================================
 def create_word_report_for_steel(samples, steel):
     doc = Document()
     style = doc.styles['Normal']
@@ -217,12 +202,10 @@ def create_word_report_for_steel(samples, steel):
     table = doc.add_table(rows=1, cols=len(cols))
     table.style = 'Table Grid'
 
-    # Заголовок
     for i, c in enumerate(cols):
         table.rows[0].cells[i].text = c
         table.rows[0].cells[i].paragraphs[0].runs[0].font.name = 'Times New Roman'
 
-    # Данные
     for sample in samples:
         if sample["steel"] != steel:
             continue
@@ -244,7 +227,6 @@ def create_word_report_for_steel(samples, steel):
                 cell.text = "–"
             cell.paragraphs[0].runs[0].font.name = 'Times New Roman'
 
-    # Строка требований
     req_row = table.add_row().cells
     req_row[0].text = f"Требования ТУ 14-3Р-55-2001 [3] для стали марки {steel}"
     req_row[0].paragraphs[0].runs[0].font.name = 'Times New Roman'
@@ -253,7 +235,6 @@ def create_word_report_for_steel(samples, steel):
         req_row[j].text = format_norm(nmin, nmax)
         req_row[j].paragraphs[0].runs[0].font.name = 'Times New Roman'
 
-    # Выводы
     doc.add_heading('Выводы', level=1)
     for s in samples:
         if s["steel"] != steel:
@@ -297,7 +278,7 @@ if uploaded_files:
         st.info("Не удалось обработать ни один файл")
         st.stop()
 
-    # Группируем образцы по маркам сталей
+    # Группируем по маркам сталей
     steel_groups = {}
     for s in all_samples:
         steel = s["steel"]
@@ -305,7 +286,7 @@ if uploaded_files:
             steel_groups[steel] = []
         steel_groups[steel].append(s)
 
-    # Показываем таблицы по каждой стали
+    # Выводим таблицы по каждой стали
     for steel, group_samples in steel_groups.items():
         st.subheader(f"Сталь: {steel}")
         elements = ELEMENTS_BY_STEEL.get(steel, [])
@@ -313,7 +294,6 @@ if uploaded_files:
             st.warning("Для этой стали нет нормативов")
             continue
 
-        # Подготовка данных
         data = []
         for s in group_samples:
             row = {"Образец": s["name"]}
@@ -326,7 +306,6 @@ if uploaded_files:
         cols_order = ["Образец"] + elements
         df = df[cols_order]
 
-        # HTML-таблица
         html_rows = ["<tr>" + "".join(f"<th style='font-family: Times New Roman;'>{c}</th>" for c in cols_order) + "</tr>"]
         for _, r in df.iterrows():
             row_html = f"<td style='font-family: Times New Roman;'>{r['Образец']}</td>"
@@ -347,7 +326,6 @@ if uploaded_files:
                         row_html += f'<td style="font-family: Times New Roman;">{val_str}</td>'
             html_rows.append("<tr>" + row_html + "</tr>")
 
-        # Строка требований
         req_cells = [f"Требования ТУ 14-3Р-55-2001 [3] для стали марки {steel}"]
         for elem in elements:
             nmin, nmax = NORMS[steel][elem]
@@ -359,7 +337,6 @@ if uploaded_files:
         st.markdown("##### Сводная таблица (копируйте в Word):")
         st.markdown(html_table, unsafe_allow_html=True)
 
-        # Кнопка экспорта
         if st.button(f"📥 Скачать отчёт для стали {steel}", key=f"download_{steel}"):
             doc = create_word_report_for_steel(group_samples, steel)
             bio = io.BytesIO()
