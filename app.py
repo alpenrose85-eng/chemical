@@ -546,74 +546,27 @@ def main():
             # Создание таблиц для отчета
             report_tables = analyzer.create_report_table(all_samples)
             
+            # Подготовка данных для экспорта
+            export_tables = {}
+            
             for grade, table_data in report_tables.items():
                 st.subheader(f"Марка стали: {grade}")
                 
-                # Используем session_state для хранения отредактированных данных
-                if f"edited_data_{grade}" not in st.session_state:
-                    st.session_state[f"edited_data_{grade}"] = table_data["data"].copy()
-                
-                # Отображаем редактор данных СКРЫВАЯ ИНДЕКС
-                edited_df = st.data_editor(
-                    st.session_state[f"edited_data_{grade}"],
-                    key=f"editor_{grade}",
-                    num_rows="fixed",
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "№": st.column_config.NumberColumn(
-                            "№",
-                            help="Порядковый номер образца",
-                            min_value=1,
-                            max_value=100,
-                            step=1,
-                            format="%d"
-                        ),
-                        "Образец": st.column_config.TextColumn(
-                            "Образец",
-                            help="Название образца",
-                            required=True
-                        )
-                    }
-                )
-                
-                # Сохраняем изменения в session_state
-                st.session_state[f"edited_data_{grade}"] = edited_df
-                
                 # Переупорядочиваем образцы по номеру
                 reordered_df, reordered_compliance = reorder_samples_by_number(
-                    edited_df, table_data["compliance"]
+                    table_data["data"], table_data["compliance"]
                 )
                 
-                # Применяем стили к переупорядоченной таблице (тоже скрываем индекс)
-                styled_table = apply_styling(reordered_df, reordered_compliance)
-                st.write("**Таблица с визуализацией отклонений:**")
-                st.dataframe(styled_table, use_container_width=True, hide_index=True)
+                # Сохраняем для экспорта
+                export_tables[grade] = reordered_df
                 
-                # Кнопка для сброса нумерации
-                if st.button(f"🔄 Сбросить нумерацию для {grade}", key=f"reset_{grade}"):
-                    # Восстанавливаем исходную нумерацию
-                    original_data = table_data["data"].copy()
-                    # Обновляем номера в session_state
-                    st.session_state[f"edited_data_{grade}"] = original_data
-                    st.rerun()
+                # Применяем стили к переупорядоченной таблице
+                styled_table = apply_styling(reordered_df, reordered_compliance)
+                st.dataframe(styled_table, use_container_width=True, hide_index=True)
             
             # Экспорт в Word
             if st.button("📄 Экспорт в Word"):
-                # Используем отредактированные и переупорядоченные данные для экспорта
-                edited_tables = {}
-                for grade in report_tables.keys():
-                    if f"edited_data_{grade}" in st.session_state:
-                        edited_df = st.session_state[f"edited_data_{grade}"]
-                        # Переупорядочиваем для экспорта
-                        reordered_df, _ = reorder_samples_by_number(
-                            edited_df, report_tables[grade]["compliance"]
-                        )
-                        edited_tables[grade] = reordered_df
-                    else:
-                        edited_tables[grade] = report_tables[grade]["data"]
-                
-                create_word_report(edited_tables, all_samples, analyzer)
+                create_word_report(export_tables, all_samples, analyzer)
                 st.success("Отчет готов к скачиванию!")
             
             # Раздел с обработанными образцами (в самом конце)
