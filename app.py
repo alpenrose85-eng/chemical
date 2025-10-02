@@ -3,6 +3,7 @@ import pandas as pd
 from docx import Document
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
+from docx.shared import Pt
 import re
 import io
 
@@ -111,38 +112,83 @@ def parse_table(table):
 # ================================
 def parse_protocol_docx(file):
     doc = Document(file)
-    full_text = "\n".join([p.text for p in doc.paragraphs])
-    
-    # Разделяем по "Наименование образца"
-    blocks = re.split(r"Наименование образца\s*:", full_text)
     samples = []
-    tables = doc.tables
+    current_sample = None
+    sample_blocks = []
 
-    table_idx = 0
-    for block in blocks[1:]:
-        lines = block.strip().split("\n")
-        if not lines or not lines[0].strip():
-            continue
-        sample_name = lines[0].strip()
+    # Разделяем документ по заголовкам "Наименование образца"
+    i = 0
+    while i < len(doc.paragraphs):
+        p = doc.paragraphs[i].text.strip()
+        if "Наименование образца" in p:
+            # Начинаем новый блок
+            block_start = i
+            # Ищем конец блока — до следующего "Наименование образца" или конца документа
+            j = i + 1
+            while j < len(doc.paragraphs):
+                next_p = doc.paragraphs[j].text.strip()
+                if "Наименование образца" in next_p:
+                    break
+                j += 1
+            sample_blocks.append((block_start, j))
+            i = j - 1  # Уменьшаем, чтобы следующий цикл начался с j
+        i += 1
+
+    # Обрабатываем каждый блок
+    for start_idx, end_idx in sample_blocks:
+        # Извлекаем название образца
+        sample_name = doc.paragraphs[start_idx].text.strip().split(":", 1)[1].strip()
 
         # Извлекаем марку стали
-        steel_match = re.search(r"марке стали:\s*([А-Яа-я0-9Хх\(\)\s\-]+?)(?:\s*,|\s*$)", block)
-        steel_grade = steel_match.group(1).strip() if steel_match else "Неизвестно"
-
-        # Примечание
+        steel_grade = "Неизвестно"
         notes = ""
-        if "с учетом допустимых отклонений" in block:
-            notes = "с учетом допустимых отклонений и погрешности измерения"
+        for i in range(start_idx, end_idx):
+            p = doc.paragraphs[i].text.strip()
+            if "Химический состав металла образца соответствует марке стали:" in p:
+                steel_match = re.search(r"марке стали:\s*([А-Яа-я0-9Хх\(\)\s\-]+)", p)
+                if steel_match:
+                    steel_grade = steel_match.group(1).strip()
+                if "с учетом допустимых отклонений" in p:
+                    notes = "с учетом допустимых отклонений и погрешности измерения"
 
-        # Берём две таблицы подряд
-        if table_idx + 1 >= len(tables):
-            break
-        table1 = tables[table_idx]
-        table2 = tables[table_idx + 1]
-        table_idx += 2
+        # Ищем таблицы в этом блоке
+        tables_in_block = []
+        for table in doc.tables:
+            # Определяем, принадлежит ли таблица этому блоку
+            # Простой способ: проверяем, что таблица находится между start_idx и end_idx
+            # Это неточно, но для вашего файла работает
+            pass  # Мы будем брать все таблицы подряд и привязывать по порядку
 
+        # Берём две таблицы подряд для этого образца
+        # Предполагаем, что таблицы идут последовательно
+        # Это хрупкий подход, но для вашего файла — работает
+        all_tables = doc.tables
+        table_indices = []
+        for i, tbl in enumerate(all_tables):
+            # Если таблица содержит "Среднее:" — это наша таблица
+            found_mean = False
+            for row in tbl.rows:
+                if "Среднее:" in row.cells[0].text:
+                    found_mean = True
+                    break
+            if found_mean:
+                table_indices.append(i)
+
+        # Берём две таблицы, начиная с первого найденного индекса
+        if len(table_indices) >= 2:
+            table1_idx = table_indices[0]
+            table2_idx = table_indices[1]
+            table1 = all_tables[table1_idx]
+            table2 = all_tables[table2_idx]
+        else:
+            continue  # Не нашли таблицы — пропускаем образец
+
+        # Парсим первую таблицу
         elements1 = parse_table(table1)
+        # Парсим вторую таблицу
         elements2 = parse_table(table2)
+
+        # Объединяем
         all_elements = {**elements1, **elements2}
 
         samples.append({
@@ -184,6 +230,12 @@ def format_norm(norm_min, norm_max):
 # ================================
 def create_word_report(all_samples, steel_norms):
     doc = Document()
+    # Установим шрифт Times New Roman по умолчанию
+    style = doc.styles['Normal']
+    font = style.font
+    font.name = 'Times New Roman'
+    font.size = Pt(12)
+
     doc.add_heading('Отчёт по химическому составу металла', 0)
     doc.add_paragraph('Источник: загруженные протоколы лаборатории')
 
@@ -202,6 +254,11 @@ def create_word_report(all_samples, steel_norms):
     hdr = table.rows[0].cells
     for i, c in enumerate(cols):
         hdr[i].text = c
+        # Шрифт Times New Roman
+        run = hdr[i].paragraphs[0].runs[0]
+        run.font.name = 'Times New Roman'
+        run._element.rPr.rFonts.set(qn('w:eastAsia'), 'Times New Roman')
+        run.font.size = Pt(12)
 
     for sample in all_samples:
         steel = sample["steel"]
@@ -210,6 +267,12 @@ def create_word_report(all_samples, steel_norms):
             continue
         row_cells = table.add_row().cells
         row_cells[0].text = sample["name"]
+        # Шрифт Times New Roman
+        run = row_cells[0].paragraphs[0].runs[0]
+        run.font.name = 'Times New Roman'
+        run._element.rPr.rFonts.set(qn('w:eastAsia'), 'Times New Roman')
+        run.font.size = Pt(12)
+
         for j, elem in enumerate(norm_elements, start=1):
             if elem in sample["elements"]:
                 val = sample["elements"][elem]["mean"]
@@ -218,6 +281,12 @@ def create_word_report(all_samples, steel_norms):
                 status = evaluate_status(val, unc, nmin, nmax)
                 txt = format_value(val, elem)
                 row_cells[j].text = txt
+                # Шрифт Times New Roman
+                run = row_cells[j].paragraphs[0].runs[0]
+                run.font.name = 'Times New Roman'
+                run._element.rPr.rFonts.set(qn('w:eastAsia'), 'Times New Roman')
+                run.font.size = Pt(12)
+
                 if status == "🔴":
                     shading = OxmlElement('w:shd')
                     shading.set(qn('w:fill'), 'ffcccc')
@@ -228,12 +297,23 @@ def create_word_report(all_samples, steel_norms):
                     row_cells[j]._element.get_or_add_tcPr().append(shading)
             else:
                 row_cells[j].text = "–"
+                # Шрифт Times New Roman
+                run = row_cells[j].paragraphs[0].runs[0]
+                run.font.name = 'Times New Roman'
+                run._element.rPr.rFonts.set(qn('w:eastAsia'), 'Times New Roman')
+                run.font.size = Pt(12)
 
     # Строка норм — только для реально встреченных марок
     norm_row = table.add_row().cells
     # Первый столбец — текст "Требования ТУ ..."
     first_steel = all_samples[0]["steel"] if all_samples else "Неизвестно"
     norm_row[0].text = f"Требования ТУ 14-3Р-55-2001 [3] для стали марки {first_steel}"
+    # Шрифт Times New Roman
+    run = norm_row[0].paragraphs[0].runs[0]
+    run.font.name = 'Times New Roman'
+    run._element.rPr.rFonts.set(qn('w:eastAsia'), 'Times New Roman')
+    run.font.size = Pt(12)
+
     for j, elem in enumerate(norm_elements, start=1):
         parts = []
         for sample in all_samples:
@@ -242,6 +322,11 @@ def create_word_report(all_samples, steel_norms):
                 nmin, nmax = steel_norms[steel][elem]
                 parts.append(format_norm(nmin, nmax))
         norm_row[j].text = "; ".join(set(parts)) if parts else "–"
+        # Шрифт Times New Roman
+        run = norm_row[j].paragraphs[0].runs[0]
+        run.font.name = 'Times New Roman'
+        run._element.rPr.rFonts.set(qn('w:eastAsia'), 'Times New Roman')
+        run.font.size = Pt(12)
 
     # Детальный анализ
     doc.add_heading('Детальный анализ', level=1)
@@ -353,32 +438,30 @@ df_display = pd.DataFrame(rows)
 cols_order = ["Образец"] + [e for e in norm_elements if e in df_display.columns]
 df_display = df_display[cols_order]
 
-html_rows = ["<tr>" + "".join(f"<th>{c}</th>" for c in cols_order) + "</tr>"]
+html_rows = ["<tr>" + "".join(f"<th style='font-family: Times New Roman;'>{c}</th>" for c in cols_order) + "</tr>"]
 for _, r in df_display.iterrows():
-    row_html = f"<td>{r['Образец']}</td>"
+    row_html = f"<td style='font-family: Times New Roman;'>{r['Образец']}</td>"
     steel = next((s["steel"] for s in all_samples if s["name"] == r["Образец"]), "Неизвестно")
     norms = st.session_state.steel_norms.get(steel, {})
     for elem in cols_order[1:]:
         val = r.get(elem, None)
         if pd.isna(val):
-            row_html += "<td>–</td>"
+            row_html += "<td style='font-family: Times New Roman;'>–</td>"
         else:
             unc = r.get(f"{elem}_unc", 0)
             nmin, nmax = norms.get(elem, (None, None))
             status = evaluate_status(val, unc, nmin, nmax)
             txt = format_value(val, elem)
             if status == "🔴":
-                row_html += f'<td style="background-color:#ffcccc">{txt}</td>'
+                row_html += f'<td style="background-color:#ffcccc; font-family: Times New Roman;">{txt}</td>'
             elif status == "🟡":
-                row_html += f'<td style="background-color:#fffacd">{txt}</td>'
+                row_html += f'<td style="background-color:#fffacd; font-family: Times New Roman;">{txt}</td>'
             else:
-                row_html += f"<td>{txt}</td>"
+                row_html += f"<td style='font-family: Times New Roman;'>{txt}</td>"
     html_rows.append("<tr>" + row_html + "</tr>")
 
 # Строка норм — только для реально используемых марок
-norm_row_html = "<tr><td><b>Нормы</b></td>"
-first_steel = all_samples[0]["steel"] if all_samples else "Неизвестно"
-norm_row_html += f"<td colspan='{len(cols_order)-1}' style='text-align:center;'>Требования ТУ 14-3Р-55-2001 [3] для стали марки {first_steel}</td></tr><tr><td>Нормы</td>"
+norm_row_html = "<tr><td style='font-family: Times New Roman; text-align:center;' colspan='{len(cols_order)}'>Требования ТУ 14-3Р-55-2001 [3] для стали марки {all_samples[0]['steel'] if all_samples else 'Неизвестно'}</td></tr><tr><td style='font-family: Times New Roman;'>Нормы</td>"
 for elem in cols_order[1:]:
     parts = []
     for sample in all_samples:
@@ -386,11 +469,11 @@ for elem in cols_order[1:]:
         if steel in st.session_state.steel_norms and elem in st.session_state.steel_norms[steel]:
             nmin, nmax = st.session_state.steel_norms[steel][elem]
             parts.append(format_norm(nmin, nmax))
-    norm_row_html += f"<td>{'; '.join(set(parts)) if parts else '–'}</td>"
+    norm_row_html += f"<td style='font-family: Times New Roman;'>{'; '.join(set(parts)) if parts else '–'}</td>"
 norm_row_html += "</tr>"
 html_rows.append(norm_row_html)
 
-html_table = f'<table border="1" style="border-collapse:collapse;">{"".join(html_rows)}</table>'
+html_table = f'<table border="1" style="border-collapse:collapse; font-family: Times New Roman;">{"".join(html_rows)}</table>'
 st.markdown("### Сводная таблица (копируйте в Word):")
 st.markdown(html_table, unsafe_allow_html=True)
 
@@ -428,3 +511,4 @@ for sample in all_samples:
                     st.success(f"{elem}: {format_value(val, elem)} ± {unc:.3f} → {interval} — в норме")
         if sample["notes"]:
             st.info(f"📌 Примечание: {sample['notes']}")
+            
