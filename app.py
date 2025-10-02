@@ -201,39 +201,24 @@ class ChemicalAnalyzer:
             st.error(f"Ошибка при парсинге таблицы: {str(e)}")
             return {}
     
-    def check_compliance(self, sample):
-        """Проверка соответствия нормативам"""
-        if not sample["steel_grade"] or sample["steel_grade"] not in self.standards:
-            return None
+    def check_element_compliance(self, element, value, standard):
+        """Проверка соответствия элемента нормативам"""
+        if element not in standard or element == "source":
+            return "normal"
         
-        standard = self.standards[sample["steel_grade"]]
-        deviations = []
-        borderlines = []
+        min_val, max_val = standard[element]
         
-        for element, value_range in standard.items():
-            # Пропускаем поле 'source'
-            if element == "source":
-                continue
-                
-            if element in sample["composition"]:
-                actual_val = sample["composition"][element]
-                min_val, max_val = value_range
-                
-                # Проверка соответствия
-                if min_val is not None and actual_val < min_val:
-                    deviations.append(f"{element}: {actual_val:.3f} < {min_val:.3f}")
-                elif max_val is not None and actual_val > max_val:
-                    deviations.append(f"{element}: {actual_val:.3f} > {max_val:.3f}")
-                elif min_val is not None and actual_val <= min_val * 1.05:
-                    borderlines.append(f"{element}: {actual_val:.3f} близко к мин. {min_val:.3f}")
-                elif max_val is not None and actual_val >= max_val * 0.95:
-                    borderlines.append(f"{element}: {actual_val:.3f} близко к макс. {max_val:.3f}")
-        
-        return {
-            "deviations": deviations,
-            "borderlines": borderlines,
-            "is_compliant": len(deviations) == 0
-        }
+        # Проверка соответствия
+        if min_val is not None and value < min_val:
+            return "deviation"
+        elif max_val is not None and value > max_val:
+            return "deviation"
+        elif min_val is not None and value <= min_val * 1.05:
+            return "borderline"
+        elif max_val is not None and value >= max_val * 0.95:
+            return "borderline"
+        else:
+            return "normal"
     
     def create_report_table(self, samples):
         """Создание сводной таблицы для отчета"""
@@ -258,21 +243,35 @@ class ChemicalAnalyzer:
             
             # Создаем DataFrame
             data = []
+            compliance_data = []  # Для хранения информации о соответствии
+            
             for sample in grade_samples:
                 row = {"Образец": sample["name"]}
+                compliance_row = {"Образец": "normal"}  # Статус для названия образца
+                
                 for elem in norm_elements:
                     if elem in sample["composition"]:
+                        value = sample["composition"][elem]
                         # Округление согласно требованиям
                         if elem in ["S", "P"]:
-                            row[elem] = f"{sample['composition'][elem]:.3f}".replace('.', ',')
+                            row[elem] = f"{value:.3f}".replace('.', ',')
                         else:
-                            row[elem] = f"{sample['composition'][elem]:.2f}".replace('.', ',')
+                            row[elem] = f"{value:.2f}".replace('.', ',')
+                        
+                        # Проверяем соответствие
+                        status = self.check_element_compliance(elem, value, standard)
+                        compliance_row[elem] = status
                     else:
                         row[elem] = "-"
+                        compliance_row[elem] = "normal"
+                
                 data.append(row)
+                compliance_data.append(compliance_row)
             
             # Добавляем строку с нормативами
             requirements_row = {"Образец": f"Требования {standard.get('source', '')} для стали марки {grade}"}
+            requirements_compliance = {"Образец": "requirements"}
+            
             for elem in norm_elements:
                 min_val, max_val = standard[elem]
                 if min_val is not None and max_val is not None:
@@ -292,12 +291,51 @@ class ChemicalAnalyzer:
                         requirements_row[elem] = f"<={max_val:.2f}".replace('.', ',')
                 else:
                     requirements_row[elem] = "не нормируется"
+                
+                requirements_compliance[elem] = "requirements"
             
             data.append(requirements_row)
+            compliance_data.append(requirements_compliance)
             
-            tables[grade] = pd.DataFrame(data)
+            tables[grade] = {
+                "data": pd.DataFrame(data),
+                "compliance": compliance_data
+            }
         
         return tables
+
+def apply_styling(df, compliance_data):
+    """Применяет стили к DataFrame на основе данных о соответствии"""
+    styled_df = df.copy()
+    
+    # CSS стили для разных статусов
+    styles = []
+    for i, row in df.iterrows():
+        if i < len(compliance_data):
+            compliance_row = compliance_data[i]
+            for col in df.columns:
+                if col in compliance_row:
+                    status = compliance_row[col]
+                    if status == "deviation":
+                        styles.append(f"background-color: #ffcccc; color: #cc0000; font-weight: bold;")  # Красный
+                    elif status == "borderline":
+                        styles.append(f"background-color: #fffacd; color: #b8860b;")  # Желтый
+                    elif status == "requirements":
+                        styles.append(f"background-color: #f0f0f0; font-style: italic;")  # Серый для требований
+                    else:
+                        styles.append("")  # Нормальный стиль
+                else:
+                    styles.append("")
+    
+    # Применяем стили
+    styled = df.style
+    for i in range(len(df)):
+        for j, col in enumerate(df.columns):
+            idx = i * len(df.columns) + j
+            if idx < len(styles) and styles[idx]:
+                styled = styled.set_properties(subset=(i, col), **{'css': styles[idx]})
+    
+    return styled
 
 def main():
     st.set_page_config(page_title="Анализатор химсостава металла", layout="wide")
@@ -441,37 +479,49 @@ def main():
             # Создание таблиц для отчета
             report_tables = analyzer.create_report_table(all_samples)
             
-            for grade, table in report_tables.items():
+            # Легенда цветов
+            st.markdown("""
+            **Легенда:**
+            - <span style='background-color: #ffcccc; padding: 2px 5px; border-radius: 3px;'>🔴 Красный</span> - отклонение от норм
+            - <span style='background-color: #fffacd; padding: 2px 5px; border-radius: 3px;'>🟡 Желтый</span> - пограничное значение
+            - <span style='background-color: #f0f0f0; padding: 2px 5px; border-radius: 3px;'>⚪ Серый</span> - нормативные требования
+            """, unsafe_allow_html=True)
+            
+            for grade, table_data in report_tables.items():
                 st.subheader(f"Марка стали: {grade}")
                 
-                # Отображение таблицы в Streamlit
-                st.dataframe(table)
+                # Редактирование таблицы
+                st.write("**Редактирование таблицы:**")
+                edited_df = st.data_editor(
+                    table_data["data"],
+                    key=f"editor_{grade}",
+                    num_rows="fixed",
+                    use_container_width=True,
+                    column_config={
+                        "Образец": st.column_config.TextColumn(
+                            "Образец",
+                            help="Название образца",
+                            required=True
+                        )
+                    }
+                )
                 
-                # Детальный анализ
-                st.write("**Детальный анализ:**")
-                grade_samples = [s for s in all_samples if s["steel_grade"] == grade]
-                
-                for sample in grade_samples:
-                    compliance = analyzer.check_compliance(sample)
-                    if compliance:
-                        if compliance["is_compliant"]:
-                            st.success(f"✅ {sample['name']} - Соответствует нормам")
-                        else:
-                            st.error(f"❌ {sample['name']} - Не соответствует нормам")
-                            
-                        if compliance["deviations"]:
-                            st.write("Отклонения:")
-                            for dev in compliance["deviations"]:
-                                st.write(f"  - {dev}")
-                        
-                        if compliance["borderlines"]:
-                            st.warning("Пограничные значения:")
-                            for border in compliance["borderlines"]:
-                                st.write(f"  - {border}")
+                # Применяем стили к отредактированной таблице
+                styled_table = apply_styling(edited_df, table_data["compliance"])
+                st.write("**Таблица с визуализацией отклонений:**")
+                st.dataframe(styled_table, use_container_width=True)
             
             # Экспорт в Word
             if st.button("📄 Экспорт в Word"):
-                create_word_report(report_tables, all_samples, analyzer)
+                # Используем отредактированные данные для экспорта
+                edited_tables = {}
+                for grade in report_tables.keys():
+                    if f"editor_{grade}" in st.session_state:
+                        edited_tables[grade] = st.session_state[f"editor_{grade}"]
+                    else:
+                        edited_tables[grade] = report_tables[grade]["data"]
+                
+                create_word_report(edited_tables, all_samples, analyzer)
                 st.success("Отчет готов к скачиванию!")
 
 def create_word_report(tables, samples, analyzer):
@@ -486,6 +536,25 @@ def create_word_report(tables, samples, analyzer):
         doc.add_paragraph(f"Дата формирования: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
         doc.add_paragraph(f"Проанализировано образцов: {len(samples)}")
         doc.add_paragraph("")
+        
+        # Легенда
+        doc.add_heading('Легенда', level=1)
+        legend_table = doc.add_table(rows=4, cols=2)
+        legend_table.style = 'Table Grid'
+        
+        legend_table.cell(0, 0).text = "Цвет"
+        legend_table.cell(0, 1).text = "Значение"
+        
+        legend_table.cell(1, 0).text = "🔴"
+        legend_table.cell(1, 1).text = "Отклонение от норм"
+        
+        legend_table.cell(2, 0).text = "🟡" 
+        legend_table.cell(2, 1).text = "Пограничное значение"
+        
+        legend_table.cell(3, 0).text = "⚪"
+        legend_table.cell(3, 1).text = "Нормативные требования"
+        
+        doc.add_paragraph()
         
         # Добавляем таблицы для каждой марки стали
         for grade, table_df in tables.items():
