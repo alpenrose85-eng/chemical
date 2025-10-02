@@ -1,75 +1,113 @@
 import streamlit as st
 import pandas as pd
 from docx import Document
-from docx.shared import RGBColor
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 import re
 import io
 
 # ================================
-# ИНИЦИАЛИЗАЦИЯ СЕССИИ + БАЗОВЫЕ НОРМЫ
+# БАЗОВЫЕ НОРМЫ ДЛЯ МАРОК СТАЛЕЙ
 # ================================
-if "steel_norms" not in st.session_state:
-    st.session_state.steel_norms = {
-        "12Х1МФ": {
-            "C": (0.10, 0.15),
-            "Si": (0.17, 0.27),
-            "Mn": (0.40, 0.70),
-            "Cr": (0.90, 1.20),
-            "Ni": (None, 0.25),
-            "Mo": (0.25, 0.35),
-            "V": (0.15, 0.30),
-            "Cu": (None, 0.20),
-            "S": (None, 0.025),
-            "P": (None, 0.025)
-        },
-        "10Х13Г12БС2Н2Д2 (ДИ59)": {
-            "C": (0.06, 0.10),
-            "Si": (1.8, 2.2),
-            "Mn": (12.00, 13.50),
-            "Cr": (11.50, 13.00),
-            "Ni": (1.8, 2.5),
-            "Nb": (0.60, 1.00),
-            "Cu": (2.00, 2.50),
-            "S": (None, 0.02),
-            "P": (None, 0.03)
-        },
-        "12Х18Н12Т": {
-            "C": (None, 0.12),
-            "Si": (None, 0.80),
-            "Mn": (1.00, 2.00),
-            "Cr": (17.00, 19.00),
-            "Ni": (11.00, 13.00),
-            "Ti": (None, 0.7),
-            "Cu": (None, 0.30),
-            "S": (None, 0.020),
-            "P": (None, 0.035)
-        },
-        "20": {
-            "C": (0.17, 0.24),
-            "Si": (0.17, 0.37),
-            "Mn": (0.35, 0.65),
-            "Cr": (None, 0.25),
-            "Ni": (None, 0.25),
-            "Cu": (None, 0.30),
-            "P": (None, 0.03),
-            "S": (None, 0.025)
-        },
-        "10Х9МФБ (ДИ82)": {
-            "C": (0.08, 0.12),
-            "Si": (None, 0.5),
-            "Mn": (0.30, 0.60),
-            "Cr": (8.60, 10.00),
-            "Ni": (None, 0.70),
-            "Mo": (0.60, 0.80),
-            "V": (0.10, 0.20),
-            "Nb": (0.10, 0.20),
-            "Cu": (None, 0.30),
-            "S": (None, 0.015),
-            "P": (None, 0.03)
-        }
+BASE_STEEL_NORMS = {
+    "12Х1МФ": {
+        "C": (0.10, 0.15),
+        "Si": (0.17, 0.27),
+        "Mn": (0.40, 0.70),
+        "Cr": (0.90, 1.20),
+        "Ni": (None, 0.25),
+        "Mo": (0.25, 0.35),
+        "V": (0.15, 0.30),
+        "Cu": (None, 0.20),
+        "S": (None, 0.025),
+        "P": (None, 0.025)
+    },
+    "10Х13Г12БС2Н2Д2 (ДИ59)": {
+        "C": (0.06, 0.10),
+        "Si": (1.8, 2.2),
+        "Mn": (12.00, 13.50),
+        "Cr": (11.50, 13.00),
+        "Ni": (1.8, 2.5),
+        "Nb": (0.60, 1.00),
+        "Cu": (2.00, 2.50),
+        "S": (None, 0.02),
+        "P": (None, 0.03)
+    },
+    "12Х18Н12Т": {
+        "C": (None, 0.12),
+        "Si": (None, 0.80),
+        "Mn": (1.00, 2.00),
+        "Cr": (17.00, 19.00),
+        "Ni": (11.00, 13.00),
+        "Ti": (None, 0.7),
+        "Cu": (None, 0.30),
+        "S": (None, 0.020),
+        "P": (None, 0.035)
+    },
+    "20": {
+        "C": (0.17, 0.24),
+        "Si": (0.17, 0.37),
+        "Mn": (0.35, 0.65),
+        "Cr": (None, 0.25),
+        "Ni": (None, 0.25),
+        "Cu": (None, 0.30),
+        "P": (None, 0.03),
+        "S": (None, 0.025)
+    },
+    "10Х9МФБ (ДИ82)": {
+        "C": (0.08, 0.12),
+        "Si": (None, 0.5),
+        "Mn": (0.30, 0.60),
+        "Cr": (8.60, 10.00),
+        "Ni": (None, 0.70),
+        "Mo": (0.60, 0.80),
+        "V": (0.10, 0.20),
+        "Nb": (0.10, 0.20),
+        "Cu": (None, 0.30),
+        "S": (None, 0.015),
+        "P": (None, 0.03)
     }
+}
+
+# Инициализация сессии
+if "steel_norms" not in st.session_state:
+    st.session_state.steel_norms = BASE_STEEL_NORMS.copy()
+
+# ================================
+# ПАРСЕР ТАБЛИЦЫ
+# ================================
+def parse_table(table):
+    """Извлекает средние значения и погрешности из таблицы."""
+    # Заголовки — первая строка
+    headers = []
+    for cell in table.rows[0].cells:
+        txt = cell.text.strip().replace("\n", "").replace("%", "").strip()
+        if txt and txt not in ["", "1", "2", "3"]:
+            headers.append(txt)
+
+    mean_row = None
+    unc_row = None
+    for row in table.rows:
+        first_cell = row.cells[0].text.strip()
+        if first_cell == "Среднее:":
+            mean_row = row
+        elif first_cell.startswith("±"):
+            unc_row = row
+
+    if not mean_row or not unc_row:
+        return {}
+
+    elements = {}
+    for j, elem in enumerate(headers):
+        if j + 1 < len(mean_row.cells) and j + 1 < len(unc_row.cells):
+            try:
+                mean_val = float(mean_row.cells[j + 1].text.replace(",", ".").strip())
+                unc_text = unc_row.cells[j + 1].text.replace("±", "").replace(",", ".").strip()
+                unc_val = float(unc_text)
+                elements[elem] = {"mean": mean_val, "unc": unc_val}
+            except (ValueError, IndexError):
+                continue
+    return elements
 
 # ================================
 # ПАРСЕР ПРОТОКОЛА
@@ -77,62 +115,41 @@ if "steel_norms" not in st.session_state:
 def parse_protocol_docx(file):
     doc = Document(file)
     full_text = "\n".join([p.text for p in doc.paragraphs])
+    
+    # Разделяем по "Наименование образца"
+    blocks = re.split(r"Наименование образца\s*:", full_text)
+    samples = []
     tables = doc.tables
 
-    samples = []
-    sample_blocks = re.split(r"Наименование образца\s*:", full_text)
-    content_blocks = sample_blocks[1:]
+    # Индекс текущей таблицы
+    table_idx = 0
 
-    table_iter = iter(tables)
-    for block in content_blocks:
+    for block in blocks[1:]:  # Первый блок — до первого образца
         lines = block.strip().split("\n")
+        if not lines:
+            continue
         sample_name = lines[0].strip()
 
-        steel_match = re.search(r"марке стали:\s*([А-Яа-я0-9Хх\(\)\s\-]+)", block)
-        if steel_match:
-            steel_grade = steel_match.group(1).strip()
-            if "," in steel_grade:
-                steel_grade = steel_grade.split(",")[0].strip()
-        else:
-            steel_grade = "Неизвестно"
+        # Извлекаем марку стали
+        steel_match = re.search(r"марке стали:\s*([А-Яа-я0-9Хх\(\)\s\-]+?)(?:\s*,|\s*$)", block)
+        steel_grade = steel_match.group(1).strip() if steel_match else "Неизвестно"
 
+        # Примечание
         notes = ""
         if "с учетом допустимых отклонений" in block:
             notes = "с учетом допустимых отклонений и погрешности измерения"
 
-        try:
-            table1 = next(table_iter)
-            table2 = next(table_iter)
-        except StopIteration:
+        # Берём две таблицы подряд
+        if table_idx + 1 >= len(tables):
             break
+        table1 = tables[table_idx]
+        table2 = tables[table_idx + 1]
+        table_idx += 2
 
-        all_elements = {}
-        for tbl in [table1, table2]:
-            headers = []
-            for cell in tbl.rows[0].cells:
-                txt = cell.text.strip().replace("\n", "").replace("%", "").strip()
-                if txt and txt not in ["", "1", "2", "3"]:
-                    headers.append(txt)
-
-            mean_row = None
-            unc_row = None
-            for row in tbl.rows:
-                first = row.cells[0].text.strip()
-                if first == "Среднее:":
-                    mean_row = row
-                elif "±" in first:
-                    unc_row = row
-
-            if mean_row and unc_row:
-                for j, elem in enumerate(headers):
-                    if j + 1 < len(mean_row.cells):
-                        try:
-                            mean_val = float(mean_row.cells[j + 1].text.replace(",", ".").strip())
-                            unc_text = unc_row.cells[j + 1].text.replace("±", "").replace(",", ".").strip()
-                            unc_val = float(unc_text)
-                            all_elements[elem] = {"mean": mean_val, "unc": unc_val}
-                        except (ValueError, IndexError):
-                            continue
+        # Парсим таблицы
+        elements1 = parse_table(table1)
+        elements2 = parse_table(table2)
+        all_elements = {**elements1, **elements2}
 
         samples.append({
             "name": sample_name,
@@ -144,7 +161,7 @@ def parse_protocol_docx(file):
     return samples
 
 # ================================
-# ФУНКЦИИ АНАЛИЗА
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ================================
 def evaluate_status(value, unc, norm_min, norm_max):
     low = value - unc
@@ -168,7 +185,7 @@ def create_word_report(all_samples, steel_norms):
     doc.add_heading('Отчёт по химическому составу металла', 0)
     doc.add_paragraph('Источник: загруженные протоколы лаборатории')
 
-    # Собираем все нормируемые элементы
+    # Все нормируемые элементы
     norm_elements = set()
     for norms in steel_norms.values():
         norm_elements.update(norms.keys())
@@ -182,7 +199,6 @@ def create_word_report(all_samples, steel_norms):
     for i, c in enumerate(cols):
         hdr[i].text = c
 
-    # Заполняем строки
     for sample in all_samples:
         steel = sample["steel"]
         norms = steel_norms.get(steel, {})
@@ -239,8 +255,12 @@ def create_word_report(all_samples, steel_norms):
     return doc
 
 # ================================
-# ИНТЕРФЕЙС УПРАВЛЕНИЯ МАРКАМИ
+# STREAMLIT UI
 # ================================
+st.set_page_config(page_title="Анализ химсостава", layout="wide")
+st.title("Анализ химического состава металла")
+
+# Боковая панель — управление марками
 st.sidebar.title("Управление марками сталей")
 steel_to_edit = st.sidebar.selectbox(
     "Выберите марку для редактирования или введите новую",
@@ -264,28 +284,29 @@ if new_steel_name:
         st.session_state.steel_norms[new_steel_name] = edited_norms
         st.sidebar.success(f"Нормы для {new_steel_name} сохранены!")
 
-# ================================
-# ОСНОВНОЙ ИНТЕРФЕЙС
-# ================================
-st.title("Анализ химического состава металла")
+# Загрузка файлов
 uploaded_files = st.file_uploader("Загрузите протоколы (.docx)", type=["docx"], accept_multiple_files=True)
 
 all_samples = []
 if uploaded_files:
     for f in uploaded_files:
-        samples = parse_protocol_docx(f)
-        all_samples.extend(samples)
+        try:
+            samples = parse_protocol_docx(f)
+            all_samples.extend(samples)
+        except Exception as e:
+            st.error(f"Ошибка при обработке файла {f.name}: {str(e)}")
 
 if not all_samples:
     st.info("Загрузите хотя бы один протокол в формате .docx")
     st.stop()
 
-# Подготовка данных для таблицы
+# Подготовка данных
 rows = []
 for sample in all_samples:
     steel = sample["steel"]
     norms = st.session_state.steel_norms.get(steel, {})
     if not norms:
+        st.warning(f"Нет норм для марки '{steel}'. Добавьте её в боковой панели.")
         continue
     row = {"Образец": sample["name"], "Марка": steel}
     for elem in norms:
@@ -302,7 +323,7 @@ if not rows:
     st.error("Нет данных для обработки по известным маркам.")
     st.stop()
 
-# HTML-таблица
+# Сводная таблица (HTML)
 norm_elements = set()
 for norms in st.session_state.steel_norms.values():
     norm_elements.update(norms.keys())
@@ -333,6 +354,23 @@ for _, r in df_display.iterrows():
             else:
                 row_html += f"<td>{txt}</td>"
     html_rows.append("<tr>" + row_html + "</tr>")
+
+# Строка норм
+norm_row_html = "<tr><td><b>Нормы</b></td>"
+for elem in cols_order[1:]:
+    all_ranges = []
+    for steel, norms in st.session_state.steel_norms.items():
+        if elem in norms:
+            nmin, nmax = norms[elem]
+            if nmin is None:
+                all_ranges.append(f"{steel}: ≤{nmax}")
+            elif nmax is None:
+                all_ranges.append(f"{steel}: ≥{nmin}")
+            else:
+                all_ranges.append(f"{steel}: {nmin}–{nmax}")
+    norm_row_html += f"<td>{'; '.join(all_ranges) if all_ranges else '–'}</td>"
+norm_row_html += "</tr>"
+html_rows.append(norm_row_html)
 
 html_table = f'<table border="1" style="border-collapse:collapse;">{"".join(html_rows)}</table>'
 st.markdown("### Сводная таблица (копируйте в Word):")
