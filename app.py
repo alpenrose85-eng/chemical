@@ -123,8 +123,6 @@ class ChemicalAnalyzer:
                         grade_text = re.sub(r'\*+', '', grade_text).strip()
                         # Берем только первую часть до запятой (основную марку стали)
                         grade_text = grade_text.split(',')[0].strip()
-                        # Берем только первую часть до точки (если есть)
-                        grade_text = grade_text.split('.')[0].strip()
                         current_sample["steel_grade"] = grade_text
             
             # Парсинг таблиц с химическим составом
@@ -140,43 +138,62 @@ class ChemicalAnalyzer:
             return []
     
     def parse_composition_table(self, table):
-        """Парсинг таблицы с химическим составом - улучшенная версия"""
+        """Парсинг таблицы с химическим составом - по фиксированным строкам"""
         composition = {}
         
         try:
-            # Собираем все строки таблицы
-            all_data = []
+            # Преобразуем таблицу в список строк
+            table_data = []
             for row in table.rows:
                 row_data = [cell.text.strip() for cell in row.cells]
-                all_data.append(row_data)
+                table_data.append(row_data)
             
-            # Ищем строку со средними значениями
-            for i, row in enumerate(all_data):
-                if row and "Среднее:" in row[0]:
-                    # Это строка со средними значениями
-                    mean_row = row
-                    
-                    # Ищем предыдущие строки с названиями элементов
-                    for j in range(i-1, max(i-5, -1), -1):
-                        prev_row = all_data[j]
-                        if prev_row and any(elem in prev_row for elem in ["C", "Si", "Mn", "P", "S", "Cr", "Mo", "Ni", 
-                                                                        "Cu", "Al", "Co", "Nb", "Ti", "V", "W", "Fe"]):
-                            # Нашли строку с элементами
-                            elements = prev_row
-                            # Сопоставляем элементы со значениями из строки средних
-                            for k, elem in enumerate(elements):
-                                if (k < len(mean_row) - 1 and 
-                                    elem in ["C", "Si", "Mn", "P", "S", "Cr", "Mo", "Ni", 
-                                            "Cu", "Al", "Co", "Nb", "Ti", "V", "W", "Fe"]):
-                                    try:
-                                        # Берем значение из следующей ячейки (пропускаем "Среднее:")
-                                        val = mean_row[k + 1]
-                                        # Заменяем точку на запятую и преобразуем в float
-                                        num_val = float(val.replace(',', '.'))
-                                        composition[elem] = num_val
-                                    except (ValueError, IndexError):
-                                        continue
-                            break
+            # Проверяем, что таблица имеет достаточно строк
+            if len(table_data) < 13:
+                st.warning(f"Таблица имеет только {len(table_data)} строк, ожидалось минимум 13")
+                return composition
+            
+            # Строка 0: заголовки первой группы элементов
+            headers_row1 = table_data[0]
+            # Строка 5: средние значения первой группы
+            values_row1 = table_data[5]
+            
+            # Строка 7: заголовки второй группы элементов  
+            headers_row2 = table_data[7]
+            # Строка 12: средние значения второй группы
+            values_row2 = table_data[12]
+            
+            # Все возможные элементы для поиска
+            all_elements = ["C", "Si", "Mn", "P", "S", "Cr", "Mo", "Ni", 
+                           "Cu", "Al", "Co", "Nb", "Ti", "V", "W", "Fe"]
+            
+            # Обрабатываем первую группу элементов
+            for i, header in enumerate(headers_row1):
+                if header in all_elements and i < len(values_row1):
+                    value_str = values_row1[i]
+                    try:
+                        # Очищаем и преобразуем значение
+                        value_str = value_str.replace(',', '.').replace(' ', '')
+                        if '±' in value_str:
+                            value_str = value_str.split('±')[0]
+                        value = float(value_str)
+                        composition[header] = value
+                    except (ValueError, IndexError):
+                        continue
+            
+            # Обрабатываем вторую группу элементов
+            for i, header in enumerate(headers_row2):
+                if header in all_elements and i < len(values_row2):
+                    value_str = values_row2[i]
+                    try:
+                        # Очищаем и преобразуем значение
+                        value_str = value_str.replace(',', '.').replace(' ', '')
+                        if '±' in value_str:
+                            value_str = value_str.split('±')[0]
+                        value = float(value_str)
+                        composition[header] = value
+                    except (ValueError, IndexError):
+                        continue
             
             return composition
             
@@ -185,7 +202,7 @@ class ChemicalAnalyzer:
             return {}
     
     def check_compliance(self, sample):
-        """Проверка соответствия нормативам - исправленная версия"""
+        """Проверка соответствия нормативам"""
         if not sample["steel_grade"] or sample["steel_grade"] not in self.standards:
             return None
         
