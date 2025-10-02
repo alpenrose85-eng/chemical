@@ -11,9 +11,150 @@ from docx.oxml.ns import qn
 from docx.shared import Pt
 import re
 
+class SampleNameMatcher:
+    def __init__(self):
+        self.surface_types = {
+            'ЭПК': ['ЭПК'],
+            'ШПП': ['ШПП'],
+            'ПС КШ': ['ПС КШ', 'труба_ПТКМ', 'труба ПТКМ'],
+            'КПП ВД': ['КПП ВД'],
+            'КПП НД-1': ['КПП НД-1'],
+            'КПП НД-2': ['КПП НД-2']
+        }
+        self.letters = ['А', 'Б', 'В', 'Г']
+    
+    def parse_correct_names(self, file_content):
+        """Парсинг файла с правильными названиями образцов"""
+        try:
+            doc = Document(io.BytesIO(file_content))
+            correct_names = []
+            
+            for paragraph in doc.paragraphs:
+                text = paragraph.text.strip()
+                # Ищем строки с форматом "число   название"
+                match = re.match(r'^\s*(\d+)\s+([^\s].*)$', text)
+                if match:
+                    number = match.group(1)
+                    name = match.group(2).strip()
+                    correct_names.append({
+                        'original': name,
+                        'number': number,
+                        'surface_type': self.extract_surface_type(name),
+                        'tube_number': self.extract_tube_number(name),
+                        'letter': self.extract_letter(name)
+                    })
+            
+            return correct_names
+        except Exception as e:
+            st.error(f"Ошибка при парсинге файла с правильными названиями: {str(e)}")
+            return []
+    
+    def extract_surface_type(self, name):
+        """Извлечение типа поверхности нагрева из названия"""
+        for surface_type, patterns in self.surface_types.items():
+            for pattern in patterns:
+                if pattern in name:
+                    return surface_type
+        return None
+    
+    def extract_tube_number(self, name):
+        """Извлечение номера трубы из названия"""
+        # Ищем числа в скобках или после названия типа
+        matches = re.findall(r'\((\d+)[,-]', name)
+        if matches:
+            return matches[0]
+        
+        # Альтернативные паттерны
+        matches = re.findall(r'(\d+)[,]\s*[А-Г]\)', name)
+        if matches:
+            return matches[0]
+        
+        return None
+    
+    def extract_letter(self, name):
+        """Извлечение буквы (А, Б, В, Г) из названия"""
+        for letter in self.letters:
+            if f',{letter}' in name or f', {letter}' in name or f'({letter})' in name:
+                return letter
+        return None
+    
+    def parse_protocol_sample_name(self, sample_name):
+        """Парсинг названия образца из протокола химического анализа"""
+        # Определяем букву из префикса (НА, НБ, НВ, НГ)
+        letter_map = {'НА': 'А', 'НБ': 'Б', 'НВ': 'В', 'НГ': 'Г', 'Н-Г': 'Г'}
+        letter = None
+        for prefix, mapped_letter in letter_map.items():
+            if sample_name.startswith(prefix):
+                letter = mapped_letter
+                break
+        
+        # Определяем тип поверхности
+        surface_type = None
+        for stype, patterns in self.surface_types.items():
+            for pattern in patterns:
+                if pattern in sample_name:
+                    surface_type = stype
+                    break
+            if surface_type:
+                break
+        
+        # Извлекаем номер трубы
+        tube_number = None
+        # Ищем числа в названии
+        numbers = re.findall(r'\d+', sample_name)
+        if numbers:
+            # Берем первое найденное число как номер трубы
+            tube_number = numbers[0]
+        
+        return {
+            'original': sample_name,
+            'surface_type': surface_type,
+            'tube_number': tube_number,
+            'letter': letter
+        }
+    
+    def find_best_match(self, protocol_sample, correct_samples):
+        """Нахождение наилучшего соответствия для образца из протокола"""
+        best_match = None
+        best_score = 0
+        
+        for correct_sample in correct_samples:
+            score = self.calculate_match_score(protocol_sample, correct_sample)
+            if score > best_score:
+                best_score = score
+                best_match = correct_sample
+        
+        # Возвращаем совпадение только если score достаточно высок
+        return best_match if best_score >= 2 else None
+    
+    def calculate_match_score(self, protocol_sample, correct_sample):
+        """Вычисление оценки соответствия между образцами"""
+        score = 0
+        
+        # Совпадение типа поверхности
+        if (protocol_sample['surface_type'] and 
+            correct_sample['surface_type'] and 
+            protocol_sample['surface_type'] == correct_sample['surface_type']):
+            score += 2
+        
+        # Совпадение номера трубы
+        if (protocol_sample['tube_number'] and 
+            correct_sample['tube_number'] and 
+            protocol_sample['tube_number'] == correct_sample['tube_number']):
+            score += 2
+        
+        # Совпадение буквы
+        if (protocol_sample['letter'] and 
+            correct_sample['letter'] and 
+            protocol_sample['letter'] == correct_sample['letter']):
+            score += 1
+        
+        return score
+
 class ChemicalAnalyzer:
     def __init__(self):
         self.load_standards()
+        self.name_matcher = SampleNameMatcher()
         
     def load_standards(self):
         """Загрузка стандартов из предустановленных файлов"""
@@ -202,6 +343,62 @@ class ChemicalAnalyzer:
         except Exception as e:
             st.error(f"Ошибка при парсинге таблицы: {str(e)}")
             return {}
+    
+    def match_sample_names(self, samples, correct_names_file):
+        """Сопоставление названий образцов с правильными названиями"""
+        if not correct_names_file:
+            return samples
+        
+        correct_samples = self.name_matcher.parse_correct_names(correct_names_file.getvalue())
+        
+        if not correct_samples:
+            st.warning("Не удалось загрузить правильные названия образцов")
+            return samples
+        
+        matched_samples = []
+        unmatched_samples = []
+        
+        for sample in samples:
+            protocol_sample_info = self.name_matcher.parse_protocol_sample_name(sample['name'])
+            best_match = self.name_matcher.find_best_match(protocol_sample_info, correct_samples)
+            
+            if best_match:
+                # Создаем копию образца с исправленным названием
+                corrected_sample = sample.copy()
+                corrected_sample['original_name'] = sample['name']  # Сохраняем оригинальное название
+                corrected_sample['name'] = best_match['original']   # Заменяем на правильное
+                matched_samples.append(corrected_sample)
+            else:
+                # Если совпадение не найдено, оставляем оригинальное название
+                sample['original_name'] = sample['name']  # Сохраняем для информации
+                unmatched_samples.append(sample)
+        
+        # Выводим информацию о сопоставлении
+        if matched_samples:
+            st.success(f"Успешно сопоставлено {len(matched_samples)} образцов")
+            
+            with st.expander("📋 Просмотр сопоставленных образцов"):
+                match_data = []
+                for sample in matched_samples:
+                    match_data.append({
+                        'Исходное название': sample['original_name'],
+                        'Правильное название': sample['name']
+                    })
+                st.table(pd.DataFrame(match_data))
+        
+        if unmatched_samples:
+            st.warning(f"Не удалось сопоставить {len(unmatched_samples)} образцов")
+            
+            with st.expander("⚠️ Просмотр несопоставленных образцов"):
+                unmatched_data = []
+                for sample in unmatched_samples:
+                    unmatched_data.append({
+                        'Образец': sample['original_name'],
+                        'Марка стали': sample['steel_grade']
+                    })
+                st.table(pd.DataFrame(unmatched_data))
+        
+        return matched_samples + unmatched_samples
     
     def check_element_compliance(self, element, value, standard):
         """Проверка соответствия элемента нормативам"""
@@ -518,18 +715,35 @@ def main():
     # Основная область для загрузки файлов
     st.header("Загрузка протоколов")
     
+    # Загрузка файла с правильными названиями
+    st.subheader("1. Загрузите файл с правильными названиями образцов")
+    correct_names_file = st.file_uploader(
+        "Файл с правильными названиями (.docx)",
+        type=["docx"],
+        key="correct_names"
+    )
+    
+    # Загрузка файлов протоколов
+    st.subheader("2. Загрузите файлы протоколов химического анализа")
     uploaded_files = st.file_uploader(
-        "Выберите файлы протоколов (.docx)", 
+        "Файлы протоколов (.docx)", 
         type=["docx"], 
-        accept_multiple_files=True
+        accept_multiple_files=True,
+        key="protocol_files"
     )
     
     all_samples = []
     
     if uploaded_files:
+        # Парсим все образцы из загруженных файлов
         for uploaded_file in uploaded_files:
             samples = analyzer.parse_protocol_file(uploaded_file.getvalue())
             all_samples.extend(samples)
+        
+        # Сопоставляем названия, если загружен файл с правильными названиями
+        if correct_names_file:
+            st.subheader("🔍 Сопоставление названий образцов")
+            all_samples = analyzer.match_sample_names(all_samples, correct_names_file)
         
         # Анализ и отображение результатов
         if all_samples:
@@ -573,6 +787,8 @@ def main():
             st.header("Обработанные образцы")
             for sample in all_samples:
                 with st.expander(f"📋 {sample['name']} - {sample['steel_grade']}"):
+                    if 'original_name' in sample:
+                        st.write(f"**Исходное название:** {sample['original_name']}")
                     st.write(f"**Марка стали:** {sample['steel_grade']}")
                     st.write("**Химический состав:**")
                     for element, value in sample['composition'].items():
