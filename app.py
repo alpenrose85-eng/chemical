@@ -34,7 +34,7 @@ NORMS = {
     }
 }
 
-# Элементы для каждой стали (только те, что проверяются по нормам)
+# Элементы для каждой стали
 ELEMENTS_BY_STEEL = {
     "12Х1МФ": ["C", "Si", "Mn", "Cr", "Ni", "Mo", "V", "Cu", "S", "P"],
     "12Х18Н12Т": ["C", "Si", "Mn", "Cr", "Ni", "Ti", "Cu", "S", "P"]
@@ -80,7 +80,6 @@ def parse_protocol_docx(file):
         if tag.endswith('p'):
             content.append(('paragraph', elem.text))
         elif tag.endswith('tbl'):
-            # Создаём временную таблицу
             temp_doc = Document()
             new_table = temp_doc.add_table(0, 0)
             new_table._element = elem
@@ -91,9 +90,12 @@ def parse_protocol_docx(file):
     current_notes = ""
     pending_tables = []
 
-    for typ, val in content:
+    i = 0
+    while i < len(content):
+        typ, val = content[i]
         if typ == 'paragraph':
             text = val.strip()
+            # Ищем начало нового образца
             if "Наименование образца" in text:
                 # Сохраняем предыдущий образец, если есть две таблицы
                 if current_sample_name and len(pending_tables) >= 2:
@@ -112,12 +114,30 @@ def parse_protocol_docx(file):
                 match = re.search(r"Наименование образца\s*[:\s]*(.+)", text)
                 current_sample_name = match.group(1).strip() if match else "Неизвестно"
                 current_steel = None
-                current_notes = "с учетом допустимых отклонений" if "с учетом допустимых отклонений" in text else ""
+                current_notes = ""
 
-                # Попытка найти марку стали в этом параграфе
-                steel_match = re.search(r"марке стали:\s*([А-Яа-я0-9ХхМФТ]+)", text)
+                # Ищем примечание в этом же параграфе
+                if "с учетом допустимых отклонений" in text:
+                    current_notes = "с учетом допустимых отклонений"
+
+                # Ищем марку стали в этом параграфе
+                steel_match = re.search(r"марке стали\s*[:\s]*([А-Яа-я0-9\sХхМФТ]+)", text)
                 if steel_match:
-                    current_steel = steel_match.group(1).strip()
+                    steel_text = steel_match.group(1).strip().replace(" ", "").upper()
+                    if "12Х1МФ" in steel_text:
+                        current_steel = "12Х1МФ"
+                    elif "12Х18Н12Т" in steel_text:
+                        current_steel = "12Х18Н12Т"
+
+            elif current_sample_name and "марке стали" in text:
+                # Если марка стали в следующем параграфе
+                steel_match = re.search(r"марке стали\s*[:\s]*([А-Яа-я0-9\sХхМФТ]+)", text)
+                if steel_match:
+                    steel_text = steel_match.group(1).strip().replace(" ", "").upper()
+                    if "12Х1МФ" in steel_text:
+                        current_steel = "12Х1МФ"
+                    elif "12Х18Н12Т" in steel_text:
+                        current_steel = "12Х18Н12Т"
 
         elif typ == 'table':
             if current_sample_name:
@@ -132,11 +152,15 @@ def parse_protocol_docx(file):
                         "elements": all_means,
                         "notes": current_notes
                     })
-                    # Сбрасываем после сохранения
+                    # Сбрасываем
                     current_sample_name = None
+                    current_steel = None
+                    current_notes = ""
                     pending_tables = []
 
-    # Обработка последнего образца (на случай, если документ заканчивается таблицами)
+        i += 1
+
+    # Обработка последнего образца
     if current_sample_name and len(pending_tables) >= 2:
         means1 = extract_means_ignore_errors(pending_tables[0])
         means2 = extract_means_ignore_errors(pending_tables[1])
@@ -281,6 +305,8 @@ if uploaded_files:
         steel_groups[steel].append(s)
 
     for steel, group_samples in steel_groups.items():
+        if steel is None:
+            continue
         st.subheader(f"Сталь: {steel}")
         elements = ELEMENTS_BY_STEEL.get(steel, [])
         if not elements:
