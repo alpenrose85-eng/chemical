@@ -34,69 +34,118 @@ NORMS = {
     }
 }
 
-# Элементы для каждой стали
+# Элементы для каждой стали (только те, что проверяются по нормам)
 ELEMENTS_BY_STEEL = {
     "12Х1МФ": ["C", "Si", "Mn", "Cr", "Ni", "Mo", "V", "Cu", "S", "P"],
     "12Х18Н12Т": ["C", "Si", "Mn", "Cr", "Ni", "Ti", "Cu", "S", "P"]
 }
 
+def extract_means_ignore_errors(table):
+    """Извлекает только первую строку 'Среднее:' из таблицы."""
+    if len(table.rows) < 2:
+        return {}
+    headers = []
+    for cell in table.rows[0].cells[1:]:
+        h = cell.text.strip().replace("\n", "").replace("%", "").strip()
+        if h:
+            headers.append(h)
+    means = {}
+    found = False
+    for row in table.rows:
+        first_cell = row.cells[0].text.strip()
+        if first_cell == "Среднее:":
+            if found:
+                # Вторая строка "Среднее:" — погрешности, пропускаем
+                break
+            for j, elem in enumerate(headers):
+                if j + 1 < len(row.cells):
+                    try:
+                        val_text = row.cells[j + 1].text.strip().replace(",", ".").replace(" ", "")
+                        if val_text and val_text not in ("-", "±"):
+                            val = float(val_text)
+                            means[elem] = val
+                    except Exception:
+                        pass
+            found = True
+    return means
+
 def parse_protocol_docx(file):
     doc = Document(file)
-    full_text = "\n".join([p.text for p in doc.paragraphs])
-    # Разделяем по заголовкам "Наименование образца"
-    blocks = re.split(r"Наименование образца\s*:", full_text)[1:]
-    tables = doc.tables
     samples = []
-    table_idx = 0
 
-    for block in blocks:
-        lines = [line.strip() for line in block.split("\n") if line.strip()]
-        if not lines:
-            continue
-        sample_name = lines[0]
+    # Собираем все элементы документа: параграфы и таблицы
+    content = []
+    for elem in doc.element.body:
+        tag = elem.tag
+        if tag.endswith('p'):
+            content.append(('paragraph', elem.text))
+        elif tag.endswith('tbl'):
+            # Создаём временную таблицу
+            temp_doc = Document()
+            new_table = temp_doc.add_table(0, 0)
+            new_table._element = elem
+            content.append(('table', new_table))
 
-        # Извлекаем марку стали
-        steel_match = re.search(r"марке стали:\s*([А-Яа-я0-9Хх]+)", block)
-        steel = steel_match.group(1).strip() if steel_match else "Неизвестно"
+    current_sample_name = None
+    current_steel = None
+    current_notes = ""
+    pending_tables = []
 
-        notes = "с учетом допустимых отклонений" if "с учетом допустимых отклонений" in block else ""
+    for typ, val in content:
+        if typ == 'paragraph':
+            text = val.strip()
+            if "Наименование образца" in text:
+                # Сохраняем предыдущий образец, если есть две таблицы
+                if current_sample_name and len(pending_tables) >= 2:
+                    means1 = extract_means_ignore_errors(pending_tables[0])
+                    means2 = extract_means_ignore_errors(pending_tables[1])
+                    all_means = {**means1, **means2}
+                    samples.append({
+                        "name": current_sample_name,
+                        "steel": current_steel,
+                        "elements": all_means,
+                        "notes": current_notes
+                    })
+                    pending_tables = []
 
-        # Берём 2 таблицы для этого образца
-        if table_idx + 1 >= len(tables):
-            break
+                # Новый образец
+                match = re.search(r"Наименование образца\s*[:\s]*(.+)", text)
+                current_sample_name = match.group(1).strip() if match else "Неизвестно"
+                current_steel = None
+                current_notes = "с учетом допустимых отклонений" if "с учетом допустимых отклонений" in text else ""
 
-        table1 = tables[table_idx]
-        table2 = tables[table_idx + 1]
-        table_idx += 2
+                # Попытка найти марку стали в этом параграфе
+                steel_match = re.search(r"марке стали:\s*([А-Яа-я0-9ХхМФТ]+)", text)
+                if steel_match:
+                    current_steel = steel_match.group(1).strip()
 
-        def extract_means(table):
-            headers = []
-            for cell in table.rows[0].cells[1:]:
-                h = cell.text.strip().replace("\n", "").replace("%", "").strip()
-                if h:
-                    headers.append(h)
-            means = {}
-            for row in table.rows:
-                if row.cells[0].text.strip() == "Среднее:":
-                    for j, elem in enumerate(headers):
-                        if j + 1 < len(row.cells):
-                            try:
-                                val = float(row.cells[j + 1].text.replace(",", ".").strip())
-                                means[elem] = val
-                            except:
-                                pass
-                    break
-            return means
+        elif typ == 'table':
+            if current_sample_name:
+                pending_tables.append(val)
+                if len(pending_tables) == 2:
+                    means1 = extract_means_ignore_errors(pending_tables[0])
+                    means2 = extract_means_ignore_errors(pending_tables[1])
+                    all_means = {**means1, **means2}
+                    samples.append({
+                        "name": current_sample_name,
+                        "steel": current_steel,
+                        "elements": all_means,
+                        "notes": current_notes
+                    })
+                    # Сбрасываем после сохранения
+                    current_sample_name = None
+                    pending_tables = []
 
-        means1 = extract_means(table1)
-        means2 = extract_means(table2)
+    # Обработка последнего образца (на случай, если документ заканчивается таблицами)
+    if current_sample_name and len(pending_tables) >= 2:
+        means1 = extract_means_ignore_errors(pending_tables[0])
+        means2 = extract_means_ignore_errors(pending_tables[1])
         all_means = {**means1, **means2}
-
         samples.append({
-            "name": sample_name,
-            "steel": steel,
+            "name": current_sample_name,
+            "steel": current_steel,
             "elements": all_means,
-            "notes": notes
+            "notes": current_notes
         })
 
     return samples
@@ -122,9 +171,6 @@ def format_norm(norm_min, norm_max):
     else:
         return f"{norm_min:.2f}–{norm_max:.2f}".replace(".", ",")
 
-# ================================
-# Генерация Word-отчёта для одной стали
-# ================================
 def create_word_report_for_steel(samples, steel):
     doc = Document()
     style = doc.styles['Normal']
@@ -224,7 +270,9 @@ if uploaded_files:
         st.info("Не удалось обработать ни один файл")
         st.stop()
 
-    # Группируем образцы по маркам сталей
+    st.success(f"Обработано образцов: {len(all_samples)}")
+
+    # Группируем по маркам сталей
     steel_groups = {}
     for s in all_samples:
         steel = s["steel"]
@@ -232,7 +280,6 @@ if uploaded_files:
             steel_groups[steel] = []
         steel_groups[steel].append(s)
 
-    # Показываем таблицы по каждой стали
     for steel, group_samples in steel_groups.items():
         st.subheader(f"Сталь: {steel}")
         elements = ELEMENTS_BY_STEEL.get(steel, [])
@@ -287,16 +334,16 @@ if uploaded_files:
         st.markdown(html_table, unsafe_allow_html=True)
 
         # Кнопка экспорта
-        if st.button(f"📥 Скачать отчёт для стали {steel}", key=f"download_{steel}"):
-            doc = create_word_report_for_steel(group_samples, steel)
-            bio = io.BytesIO()
-            doc.save(bio)
-            st.download_button(
-                label=f"Скачать отчёт_{steel}.docx",
-                data=bio.getvalue(),
-                file_name=f"Отчёт_химсостав_{steel}.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            )
+        bio = io.BytesIO()
+        doc = create_word_report_for_steel(group_samples, steel)
+        doc.save(bio)
+        st.download_button(
+            label=f"📥 Скачать отчёт для стали {steel}",
+            data=bio.getvalue(),
+            file_name=f"Отчёт_химсостав_{steel}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            key=f"download_{steel}"
+        )
 
     # Детальный анализ
     st.subheader("Детальный анализ")
