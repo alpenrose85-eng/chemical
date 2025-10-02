@@ -30,147 +30,127 @@ NORMS = {
         "Ti": (None, 0.7),
         "Cu": (None, 0.30),
         "S": (None, 0.020),
-        "P": (None, 0.035)  # ПРАВИЛЬНО!
+        "P": (None, 0.035)  # ВАЖНО: 0.035, не 0.04!
     }
 }
 
-# Элементы для каждой стали
+# Элементы для каждой стали (только те, что проверяются)
 ELEMENTS_BY_STEEL = {
     "12Х1МФ": ["C", "Si", "Mn", "Cr", "Ni", "Mo", "V", "Cu", "S", "P"],
     "12Х18Н12Т": ["C", "Si", "Mn", "Cr", "Ni", "Ti", "Cu", "S", "P"]
 }
 
-def extract_means_ignore_errors(table):
-    """Извлекает только первую строку 'Среднее:' из таблицы."""
-    if len(table.rows) < 2:
-        return {}
-    headers = []
+def extract_means_from_single_table(table):
+    """Извлекает средние значения из одной таблицы с двумя блоками."""
+    means = {}
+
+    if len(table.rows) < 13:
+        return means
+
+    # Блок 1: C, Si, Mn, P, S, Cr, Mo, Ni
+    headers1 = []
     for cell in table.rows[0].cells[1:]:
         h = cell.text.strip().replace("\n", "").replace("%", "").strip()
         if h:
-            headers.append(h)
-    means = {}
-    found = False
-    for row in table.rows:
-        first_cell_text = row.cells[0].text.strip()
-        if first_cell_text == "Среднее:":
-            if found:
-                # Вторая строка "Среднее:" — погрешности, пропускаем
-                break
-            for j, elem in enumerate(headers):
-                if j + 1 < len(row.cells):
-                    val_text = row.cells[j + 1].text.strip()
-                    if val_text and val_text not in ("-", "±", ""):
-                        try:
-                            val = float(val_text.replace(",", ".").replace(" ", ""))
-                            means[elem] = val
-                        except Exception:
-                            pass
-            found = True
+            headers1.append(h)
+
+    row5 = table.rows[5]
+    if row5.cells[0].text.strip() == "Среднее:":
+        for j, elem in enumerate(headers1):
+            if j + 1 < len(row5.cells):
+                val_text = row5.cells[j + 1].text.strip()
+                if val_text and val_text not in ("-", "±", ""):
+                    try:
+                        val = float(val_text.replace(",", ".").replace(" ", ""))
+                        means[elem] = val
+                    except Exception:
+                        pass
+
+    # Блок 2: Cu, Al, Co, Nb, Ti, V, W, Fe
+    headers2 = []
+    for cell in table.rows[6].cells[1:]:
+        h = cell.text.strip().replace("\n", "").replace("%", "").strip()
+        if h:
+            headers2.append(h)
+
+    row12 = table.rows[12]
+    if row12.cells[0].text.strip() == "Среднее:":
+        for j, elem in enumerate(headers2):
+            if j + 1 < len(row12.cells):
+                val_text = row12.cells[j + 1].text.strip()
+                if val_text and val_text not in ("-", "±", ""):
+                    try:
+                        val = float(val_text.replace(",", ".").replace(" ", ""))
+                        means[elem] = val
+                    except Exception:
+                        pass
+
     return means
 
 def parse_protocol_docx(file):
     doc = Document(file)
-    samples = []
-
-    # Собираем все элементы документа: параграфы и таблицы
-    content = []
+    
+    # Собираем все элементы: ('paragraph', текст) или ('table', таблица)
+    elements = []
     for elem in doc.element.body:
         tag = elem.tag
         if tag.endswith('p'):
-            content.append(('paragraph', elem.text))
+            elements.append(('paragraph', elem.text))
         elif tag.endswith('tbl'):
             temp_doc = Document()
             new_table = temp_doc.add_table(0, 0)
             new_table._element = elem
-            content.append(('table', new_table))
+            elements.append(('table', new_table))
 
-    current_sample_name = None
-    current_steel = None
-    current_notes = ""
-    pending_tables = []
+    samples = []
 
     i = 0
-    while i < len(content):
-        typ, val = content[i]
-        if typ == 'paragraph':
-            text = val.strip()
-            # Ищем начало нового образца
-            if "Наименование образца" in text:
-                # Сохраняем предыдущий образец, если есть две таблицы
-                if current_sample_name and len(pending_tables) >= 2:
-                    means1 = extract_means_ignore_errors(pending_tables[0])
-                    means2 = extract_means_ignore_errors(pending_tables[1])
-                    all_means = {**means1, **means2}
-                    samples.append({
-                        "name": current_sample_name,
-                        "steel": current_steel,
-                        "elements": all_means,
-                        "notes": current_notes
-                    })
-                    pending_tables = []
+    while i < len(elements):
+        typ, val = elements[i]
+        if typ == 'paragraph' and "Наименование образца" in val:
+            # Извлекаем имя образца
+            match = re.search(r"Наименование образца\s*[:\s]*(.+)", val)
+            sample_name = match.group(1).strip() if match else "Неизвестно"
 
-                # Новый образец
-                match = re.search(r"Наименование образца\s*[:\s]*(.+)", text)
-                current_sample_name = match.group(1).strip() if match else "Неизвестно"
-                current_steel = None
-                current_notes = ""
-
-                # Ищем примечание в этом же параграфе
+            # Ищем марку стали и примечание в текущем и следующих параграфах
+            steel = None
+            notes = ""
+            j = i
+            while j < len(elements) and elements[j][0] == 'paragraph':
+                text = elements[j][1]
+                if "марке стали" in text:
+                    steel_match = re.search(r"марке стали\s*[:\s]*([А-Яа-я0-9\sХхМФТ]+)", text)
+                    if steel_match:
+                        steel_text = steel_match.group(1).strip().upper().replace(" ", "")
+                        if "12Х1МФ" in steel_text:
+                            steel = "12Х1МФ"
+                        elif "12Х18Н12Т" in steel_text:
+                            steel = "12Х18Н12Т"
                 if "с учетом допустимых отклонений" in text:
-                    current_notes = "с учетом допустимых отклонений"
+                    notes = "с учетом допустимых отклонений"
+                j += 1
 
-                # Ищем марку стали в этом параграфе
-                steel_match = re.search(r"марке стали\s*[:\s]*([А-Яа-я0-9\sХхМФТ]+)", text)
-                if steel_match:
-                    steel_text = steel_match.group(1).strip().upper().replace(" ", "")
-                    if "12Х1МФ" in steel_text:
-                        current_steel = "12Х1МФ"
-                    elif "12Х18Н12Т" in steel_text:
-                        current_steel = "12Х18Н12Т"
+            # Ищем следующую таблицу после этого блока параграфов
+            table = None
+            k = j
+            while k < len(elements):
+                if elements[k][0] == 'table':
+                    table = elements[k][1]
+                    break
+                k += 1
 
-            elif current_sample_name and "марке стали" in text:
-                # Если марка стали в следующем параграфе
-                steel_match = re.search(r"марке стали\s*[:\s]*([А-Яа-я0-9\sХхМФТ]+)", text)
-                if steel_match:
-                    steel_text = steel_match.group(1).strip().upper().replace(" ", "")
-                    if "12Х1МФ" in steel_text:
-                        current_steel = "12Х1МФ"
-                    elif "12Х18Н12Т" in steel_text:
-                        current_steel = "12Х18Н12Т"
+            if table is not None:
+                means = extract_means_from_single_table(table)
+                samples.append({
+                    "name": sample_name,
+                    "steel": steel,
+                    "elements": means,
+                    "notes": notes
+                })
 
-        elif typ == 'table':
-            if current_sample_name:
-                pending_tables.append(val)
-                if len(pending_tables) == 2:
-                    means1 = extract_means_ignore_errors(pending_tables[0])
-                    means2 = extract_means_ignore_errors(pending_tables[1])
-                    all_means = {**means1, **means2}
-                    samples.append({
-                        "name": current_sample_name,
-                        "steel": current_steel,
-                        "elements": all_means,
-                        "notes": current_notes
-                    })
-                    # Сбрасываем
-                    current_sample_name = None
-                    current_steel = None
-                    current_notes = ""
-                    pending_tables = []
-
+            # Продолжаем с позиции после таблицы
+            i = k
         i += 1
-
-    # Обработка последнего образца
-    if current_sample_name and len(pending_tables) >= 2:
-        means1 = extract_means_ignore_errors(pending_tables[0])
-        means2 = extract_means_ignore_errors(pending_tables[1])
-        all_means = {**means1, **means2}
-        samples.append({
-            "name": current_sample_name,
-            "steel": current_steel,
-            "elements": all_means,
-            "notes": current_notes
-        })
 
     return samples
 
