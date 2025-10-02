@@ -363,6 +363,9 @@ def reorder_samples_by_number(df, compliance_data):
     samples_df = df.iloc[:-1].copy()
     samples_compliance = compliance_data[:-1]
     
+    # Преобразуем номера в целые числа для правильной сортировки
+    samples_df['№'] = samples_df['№'].astype(int)
+    
     # Сортируем образцы по номеру
     samples_df = samples_df.sort_values('№')
     
@@ -555,11 +558,13 @@ def main():
                 st.write("**Редактирование таблицы:**")
                 st.write("Измените номера в столбце '№' для изменения порядка образцов")
                 
-                # Создаем копию данных для редактирования
-                editable_data = table_data["data"].copy()
+                # Инициализируем session_state для этой таблицы, если его нет
+                if f"edited_{grade}" not in st.session_state:
+                    st.session_state[f"edited_{grade}"] = table_data["data"].copy()
                 
+                # Отображаем редактор данных
                 edited_df = st.data_editor(
-                    editable_data,
+                    st.session_state[f"edited_{grade}"],
                     key=f"editor_{grade}",
                     num_rows="fixed",
                     use_container_width=True,
@@ -580,6 +585,9 @@ def main():
                     }
                 )
                 
+                # Сохраняем изменения
+                st.session_state[f"edited_{grade}"] = edited_df
+                
                 # Переупорядочиваем образцы по номеру
                 reordered_df, reordered_compliance = reorder_samples_by_number(
                     edited_df, table_data["compliance"]
@@ -595,8 +603,8 @@ def main():
                 # Используем отредактированные и переупорядоченные данные для экспорта
                 edited_tables = {}
                 for grade in report_tables.keys():
-                    if f"editor_{grade}" in st.session_state:
-                        edited_df = st.session_state[f"editor_{grade}"]
+                    if f"edited_{grade}" in st.session_state:
+                        edited_df = st.session_state[f"edited_{grade}"]
                         # Переупорядочиваем для экспорта
                         reordered_df, _ = reorder_samples_by_number(
                             edited_df, report_tables[grade]["compliance"]
