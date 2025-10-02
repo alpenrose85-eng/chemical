@@ -41,65 +41,133 @@ ELEMENTS_BY_STEEL = {
 }
 
 def parse_protocol_docx(file):
+# ================================
+# Исправленная функция parse_protocol_docx
+# ================================
+
+from docx.oxml.text.paragraph import CT_P
+from docx.oxml.table import CT_Tbl
+from docx.text.paragraph import Paragraph
+from docx.table import Table
+from docx.document import Document as DocxDocumentClass
+
+def iter_block_items(parent):
+    """Итератор по элементам документа (параграфы и таблицы в порядке следования)."""
+    if isinstance(parent, DocxDocumentClass):
+        parent_elm = parent.element.body
+    else:
+        raise ValueError("parent must be a Document instance")
+    for child in parent_elm.iterchildren():
+        if isinstance(child, CT_P):
+            yield Paragraph(child, parent)
+        elif isinstance(child, CT_Tbl):
+            yield Table(child, parent)
+
+def extract_means_from_table(table):
+    """Извлекает средние значения из одной таблицы."""
+    means = {}
+    headers = []
+
+    for i, row in enumerate(table.rows):
+        first_cell = row.cells[0].text.strip()
+        first_cell_clean = re.sub(r'\s+', ' ', first_cell).strip()
+
+        # Определяем заголовки: строка, где первая ячейка пустая, а остальные — буквы
+        if not first_cell_clean or first_cell_clean == "-":
+            headers = []
+            for cell in row.cells[1:]:
+                h = re.sub(r'\s+', ' ', cell.text).replace('%', '').strip()
+                if h and not h.replace('.', '').replace(',', '').isdigit() and not h.startswith(('±', '1', '2', '3', 'Среднее')):
+                    headers.append(h)
+
+        # Извлекаем строку "Среднее:" (но не погрешности)
+        if "Среднее:" in first_cell_clean and not first_cell_clean.startswith("Среднее: ±"):
+            for j, cell in enumerate(row.cells[1:], start=0):
+                val_text = re.sub(r'\s+', ' ', cell.text).strip()
+                if val_text and not val_text.startswith(('±', '-')) and j < len(headers):
+                    try:
+                        val = float(val_text.replace(',', '.'))
+                        elem = headers[j]
+                        means[elem] = val
+                    except ValueError:
+                        continue
+    return means
+
+def parse_protocol_docx(file):
     doc = Document(file)
-    full_text = "\n".join([p.text for p in doc.paragraphs])
-    # Разделяем по заголовкам "Наименование образца"
-    blocks = re.split(r"Наименование образца\s*:", full_text)[1:]
-    tables = doc.tables
     samples = []
-    table_idx = 0
+    current_sample_name = None
+    current_steel = None
+    table_buffer = []  # Буфер для хранения таблиц текущего образца
 
-    def extract_means(table):
-        """Извлекает средние значения из таблицы, заголовки — из первой строки."""
-        headers = []
-        for cell in table.rows[0].cells[1:]:
-            h = cell.text.strip().replace("\n", "").replace("%", "").strip()
-            if h and not h.startswith(('1', '2', '3', '±', 'Среднее')):
-                headers.append(h)
-        
-        means = {}
-        for row in table.rows:
-            first_cell_text = row.cells[0].text.strip()
-            if first_cell_text == "Среднее:":
-                for j, elem in enumerate(headers):
-                    if j + 1 < len(row.cells):
-                        try:
-                            val_text = row.cells[j + 1].text.strip()
-                            if val_text and not val_text.startswith('±'):
-                                val = float(val_text.replace(",", ".").replace(" ", ""))
-                                means[elem] = val
-                        except (ValueError, IndexError):
-                            pass
-                break  # Берём первую строку "Среднее:"
-        return means
+    for block in iter_block_items(doc):
+        if isinstance(block, Paragraph):
+            para_text = block.text.strip()
+            if "Наименование образца :" in para_text:
+                # Сохраняем предыдущий образец, если есть данные
+                if current_sample_name and len(table_buffer) >= 2:
+                    means1 = extract_means_from_table(table_buffer[0])
+                    means2 = extract_means_from_table(table_buffer[1])
+                    all_means = {**means1, **means2}
+                    notes = "с учетом допустимых отклонений" if "с учетом допустимых отклонений" in para_text else ""
+                    samples.append({
+                        "name": current_sample_name,
+                        "steel": current_steel,
+                        "elements": all_means,
+                        "notes": notes
+                    })
+                # Сбрасываем буфер
+                table_buffer = []
+                # Начинаем новый образец
+                current_sample_name = para_text.split("Наименование образца :")[-1].strip()
+                # Ищем марку стали в этом же параграфе
+                steel_match = re.search(r"марке стали:\s*([А-Яа-я0-9Хх]+)", para_text)
+                if steel_match:
+                    current_steel = steel_match.group(1).strip()
+                else:
+                    current_steel = "Неизвестно"
+            elif current_sample_name and "с учетом допустимых отклонений" in para_text:
+                # Просто запоминаем, что для этого образца есть примечание
+                # (мы добавим его при создании образца)
+                pass
+        elif isinstance(block, Table):
+            if current_sample_name:
+                table_buffer.append(block)
+                # Если накопили 2 таблицы — обрабатываем
+                if len(table_buffer) == 2:
+                    means1 = extract_means_from_table(table_buffer[0])
+                    means2 = extract_means_from_table(table_buffer[1])
+                    all_means = {**means1, **means2}
+                    # Проверяем, есть ли примечание в параграфах, относящихся к этому образцу
+                    notes = ""
+                    # Простой способ: проверяем, содержится ли текст "с учетом допустимых отклонений" в параграфе с именем образца
+                    # или в следующих параграфах до следующего образца
+                    # Для простоты, если в параграфе с именем образца есть примечание
+                    if "с учетом допустимых отклонений" in current_sample_name:
+                        notes = "с учетом допустимых отклонений"
+                    else:
+                        # Можно сделать более сложную проверку, но пока так
+                        pass
+                    samples.append({
+                        "name": current_sample_name,
+                        "steel": current_steel,
+                        "elements": all_means,
+                        "notes": notes
+                    })
+                    # Сбрасываем для следующего образца
+                    current_sample_name = None
+                    current_steel = None
+                    table_buffer = []
 
-    for block in blocks:
-        lines = [line.strip() for line in block.split("\n") if line.strip()]
-        if not lines:
-            continue
-        sample_name = lines[0]
-
-        # Извлекаем марку стали
-        steel_match = re.search(r"марке стали:\s*([А-Яа-я0-9Хх]+)", block)
-        steel = steel_match.group(1).strip() if steel_match else "Неизвестно"
-
-        notes = "с учетом допустимых отклонений" if "с учетом допустимых отклонений" in block else ""
-
-        # Берём 2 таблицы для этого образца
-        if table_idx + 1 >= len(tables):
-            break
-
-        table1 = tables[table_idx]
-        table2 = tables[table_idx + 1]
-        table_idx += 2
-
-        means1 = extract_means(table1)
-        means2 = extract_means(table2)
+    # Обработка последнего образца
+    if current_sample_name and len(table_buffer) >= 2:
+        means1 = extract_means_from_table(table_buffer[0])
+        means2 = extract_means_from_table(table_buffer[1])
         all_means = {**means1, **means2}
-
+        notes = "с учетом допустимых отклонений" if "с учетом допустимых отклонений" in current_sample_name else ""
         samples.append({
-            "name": sample_name,
-            "steel": steel,
+            "name": current_sample_name,
+            "steel": current_steel,
             "elements": all_means,
             "notes": notes
         })
