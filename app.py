@@ -528,20 +528,12 @@ def main():
     
     if uploaded_files:
         for uploaded_file in uploaded_files:
-            st.write(f"**Обработка файла:** {uploaded_file.name}")
-            
             samples = analyzer.parse_protocol_file(uploaded_file.getvalue())
             all_samples.extend(samples)
-            
-            for sample in samples:
-                st.write(f"- Образец: {sample['name']}, Марка стали: {sample['steel_grade']}")
         
         # Анализ и отображение результатов
         if all_samples:
             st.header("Результаты анализа")
-            
-            # Создание таблиц для отчета
-            report_tables = analyzer.create_report_table(all_samples)
             
             # Легенда цветов
             st.markdown("""
@@ -551,12 +543,11 @@ def main():
             - <span style='background-color: #f0f0f0; padding: 2px 5px; border-radius: 3px;'>⚪ Серый</span> - нормативные требования
             """, unsafe_allow_html=True)
             
+            # Создание таблиц для отчета
+            report_tables = analyzer.create_report_table(all_samples)
+            
             for grade, table_data in report_tables.items():
                 st.subheader(f"Марка стали: {grade}")
-                
-                # Редактирование таблицы
-                st.write("**Редактирование таблицы:**")
-                st.write("Измените номера в столбце '№' для изменения порядка образцов")
                 
                 # Используем session_state для хранения отредактированных данных
                 if f"edited_data_{grade}" not in st.session_state:
@@ -568,7 +559,7 @@ def main():
                     key=f"editor_{grade}",
                     num_rows="fixed",
                     use_container_width=True,
-                    hide_index=True,  # Скрываем индекс (0, 1, 2...)
+                    hide_index=True,
                     column_config={
                         "№": st.column_config.NumberColumn(
                             "№",
@@ -599,14 +590,6 @@ def main():
                 st.write("**Таблица с визуализацией отклонений:**")
                 st.dataframe(styled_table, use_container_width=True, hide_index=True)
                 
-                # Альтернативный способ переупорядочивания - через перетаскивание
-                st.write("**Альтернативное переупорядочивание:**")
-                st.info("""
-                Для изменения порядка образцов вы можете:
-                1. Изменить номер в столбце '№' (образцы автоматически отсортируются по номеру)
-                2. Или скопировать данные в Excel, изменить порядок и вставить обратно
-                """)
-                
                 # Кнопка для сброса нумерации
                 if st.button(f"🔄 Сбросить нумерацию для {grade}", key=f"reset_{grade}"):
                     # Восстанавливаем исходную нумерацию
@@ -632,6 +615,15 @@ def main():
                 
                 create_word_report(edited_tables, all_samples, analyzer)
                 st.success("Отчет готов к скачиванию!")
+            
+            # Раздел с обработанными образцами (в самом конце)
+            st.header("Обработанные образцы")
+            for sample in all_samples:
+                with st.expander(f"📋 {sample['name']} - {sample['steel_grade']}"):
+                    st.write(f"**Марка стали:** {sample['steel_grade']}")
+                    st.write("**Химический состав:**")
+                    for element, value in sample['composition'].items():
+                        st.write(f"- {element}: {value}")
 
 def create_word_report(tables, samples, analyzer):
     """Создание Word отчета"""
@@ -689,7 +681,6 @@ def create_word_report(tables, samples, analyzer):
         
         # Сохраняем документ
         doc.save("химический_анализ_отчет.docx")
-        st.success("Отчет сохранен как 'химический_анализ_отчет.docx'")
         
         # Предоставляем ссылку для скачивания
         with open("химический_анализ_отчет.docx", "rb") as file:
