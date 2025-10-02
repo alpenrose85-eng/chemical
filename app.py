@@ -50,16 +50,17 @@ def extract_means_from_single_table(table):
     # Блок 1: C, Si, Mn, P, S, Cr, Mo, Ni
     headers1 = []
     for cell in table.rows[0].cells[1:]:
-        h = cell.text.strip().replace("\n", "").replace("%", "").strip()
+        h = re.sub(r"\s+", " ", cell.text).strip().replace("%", "").strip()
         if h:
             headers1.append(h)
 
     row5 = table.rows[5]
-    if row5.cells[0].text.strip() == "Среднее:":
+    first_cell_row5 = re.sub(r"\s+", " ", row5.cells[0].text).strip()
+    if re.fullmatch(r"Среднее:", first_cell_row5):
         for j, elem in enumerate(headers1):
             if j + 1 < len(row5.cells):
-                val_text = row5.cells[j + 1].text.strip()
-                if val_text and val_text not in ("-", "±", ""):
+                val_text = re.sub(r"\s+", " ", row5.cells[j + 1].text).strip()
+                if val_text and not val_text.startswith("±") and val_text not in ("-", ""):
                     try:
                         val = float(val_text.replace(",", ".").replace(" ", ""))
                         means[elem] = val
@@ -69,16 +70,17 @@ def extract_means_from_single_table(table):
     # Блок 2: Cu, Al, Co, Nb, Ti, V, W, Fe
     headers2 = []
     for cell in table.rows[6].cells[1:]:
-        h = cell.text.strip().replace("\n", "").replace("%", "").strip()
+        h = re.sub(r"\s+", " ", cell.text).strip().replace("%", "").strip()
         if h:
             headers2.append(h)
 
     row12 = table.rows[12]
-    if row12.cells[0].text.strip() == "Среднее:":
+    first_cell_row12 = re.sub(r"\s+", " ", row12.cells[0].text).strip()
+    if re.fullmatch(r"Среднее:", first_cell_row12):
         for j, elem in enumerate(headers2):
             if j + 1 < len(row12.cells):
-                val_text = row12.cells[j + 1].text.strip()
-                if val_text and val_text not in ("-", "±", ""):
+                val_text = re.sub(r"\s+", " ", row12.cells[j + 1].text).strip()
+                if val_text and not val_text.startswith("±") and val_text not in ("-", ""):
                     try:
                         val = float(val_text.replace(",", ".").replace(" ", ""))
                         means[elem] = val
