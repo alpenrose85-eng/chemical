@@ -51,6 +51,32 @@ class ChemicalAnalyzer:
                 "P": (None, 0.030),
                 "S": (None, 0.025),
                 "source": "ГОСТ 1050-2013"
+            },
+            "Ди82": {
+                "C": (0.08, 0.12),
+                "Si": (None, 0.5),
+                "Mn": (0.30, 0.60),
+                "Cr": (8.60, 10.00),
+                "Ni": (None, 0.70),
+                "Mo": (0.60, 0.80),
+                "V": (0.10, 0.20),
+                "Nb": (0.10, 0.20),
+                "Cu": (None, 0.30),
+                "S": (None, 0.015),
+                "P": (None, 0.03),
+                "source": "Спецификация"
+            },
+            "Ди59": {
+                "C": (0.06, 0.10),
+                "Si": (1.8, 2.2),
+                "Mn": (12.00, 13.50),
+                "Cr": (11.50, 13.00),
+                "Ni": (1.8, 2.5),
+                "Nb": (0.60, 1.00),
+                "Cu": (2.00, 2.50),
+                "S": (None, 0.02),
+                "P": (None, 0.03),
+                "source": "Спецификация"
             }
         }
         
@@ -63,8 +89,10 @@ class ChemicalAnalyzer:
     def save_user_standards(self):
         """Сохранение пользовательских стандартов"""
         with open("user_standards.json", "w", encoding="utf-8") as f:
-            json.dump({k: v for k, v in self.standards.items() 
-                      if k not in ["12Х1МФ", "12Х18Н12Т", "сталь 20"]}, f, ensure_ascii=False)
+            # Сохраняем только пользовательские стандарты (не предустановленные)
+            predefined = ["12Х1МФ", "12Х18Н12Т", "сталь 20", "Ди82", "Ди59"]
+            user_standards = {k: v for k, v in self.standards.items() if k not in predefined}
+            json.dump(user_standards, f, ensure_ascii=False, indent=2)
     
     def parse_protocol_file(self, file_content):
         """Парсинг файла протокола"""
@@ -131,14 +159,15 @@ class ChemicalAnalyzer:
                     # Ищем предыдущие строки с названиями элементов
                     for j in range(i-1, max(i-5, -1), -1):
                         prev_row = all_data[j]
-                        if prev_row and prev_row[0] in ["C", "Si", "Mn", "P", "S", "Cr", "Mo", "Ni", 
-                                                      "Cu", "Al", "Co", "Nb", "Ti", "V", "W", "Fe"]:
+                        if prev_row and any(elem in prev_row for elem in ["C", "Si", "Mn", "P", "S", "Cr", "Mo", "Ni", 
+                                                                        "Cu", "Al", "Co", "Nb", "Ti", "V", "W", "Fe"]):
                             # Нашли строку с элементами
                             elements = prev_row
                             # Сопоставляем элементы со значениями из строки средних
                             for k, elem in enumerate(elements):
-                                if k < len(mean_row) - 1 and elem in ["C", "Si", "Mn", "P", "S", "Cr", "Mo", "Ni", 
-                                                                     "Cu", "Al", "Co", "Nb", "Ti", "V", "W", "Fe"]:
+                                if (k < len(mean_row) - 1 and 
+                                    elem in ["C", "Si", "Mn", "P", "S", "Cr", "Mo", "Ni", 
+                                            "Cu", "Al", "Co", "Nb", "Ti", "V", "W", "Fe"]):
                                     try:
                                         # Берем значение из следующей ячейки (пропускаем "Среднее:")
                                         val = mean_row[k + 1]
@@ -203,6 +232,7 @@ class ChemicalAnalyzer:
             grade_samples = [s for s in samples if s["steel_grade"] == grade]
             
             if grade not in self.standards:
+                st.warning(f"Нет нормативов для марки стали: {grade}")
                 continue
                 
             standard = self.standards[grade]
@@ -262,37 +292,114 @@ def main():
     with st.sidebar:
         st.header("Управление нормативами")
         
-        # Добавление нового норматива
-        st.subheader("Добавить новую марку стали")
-        new_grade = st.text_input("Марка стали")
-        new_source = st.text_input("Нормативный документ")
+        # Просмотр существующих нормативов
+        st.subheader("Существующие марки стали")
+        selected_standard = st.selectbox(
+            "Выберите марку для просмотра",
+            options=list(analyzer.standards.keys())
+        )
+        
+        if selected_standard:
+            st.write(f"**Норматив для {selected_standard}:**")
+            standard = analyzer.standards[selected_standard]
+            for elem, (min_val, max_val) in standard.items():
+                if elem != "source":
+                    if min_val is not None and max_val is not None:
+                        st.write(f"- {elem}: {min_val:.3f} - {max_val:.3f}")
+                    elif min_val is not None:
+                        st.write(f"- {elem}: ≥ {min_val:.3f}")
+                    elif max_val is not None:
+                        st.write(f"- {elem}: ≤ {max_val:.3f}")
+            st.write(f"Источник: {standard.get('source', 'не указан')}")
+        
+        st.divider()
+        
+        # Добавление/редактирование нормативов
+        st.subheader("Добавить/редактировать марку стали")
+        
+        # Выбор марки для редактирования или ввод новой
+        edit_option = st.radio(
+            "Выберите действие:",
+            ["Создать новую марку", "Редактировать существующую"]
+        )
+        
+        if edit_option == "Редактировать существующую":
+            edit_grade = st.selectbox(
+                "Выберите марку для редактирования",
+                options=list(analyzer.standards.keys())
+            )
+            new_grade = st.text_input("Марка стали", value=edit_grade)
+            new_source = st.text_input("Нормативный документ", 
+                                     value=analyzer.standards[edit_grade].get("source", ""))
+        else:
+            edit_grade = None
+            new_grade = st.text_input("Марка стали")
+            new_source = st.text_input("Нормативный документ")
         
         if new_grade:
-            st.write("Укажите диапазоны для элементов (оставьте пустым если не нормируется):")
-            col1, col2 = st.columns(2)
-            elements_ranges = {}
+            st.write("**Добавление элементов:**")
             
+            # Динамическое добавление элементов
+            if "elements" not in st.session_state:
+                st.session_state.elements = []
+            
+            # Поля для добавления нового элемента
+            col1, col2, col3 = st.columns([2, 1, 1])
             with col1:
-                for elem in ["C", "Si", "Mn", "Cr", "Ni", "Mo"]:
-                    min_val = st.number_input(f"{elem} мин", value=0.0, format="%.3f", key=f"min_{elem}")
-                    max_val = st.number_input(f"{elem} макс", value=0.0, format="%.3f", key=f"max_{elem}")
-                    if min_val > 0 or max_val > 0:
-                        elements_ranges[elem] = (min_val if min_val > 0 else None, 
-                                               max_val if max_val > 0 else None)
-            
+                new_element = st.text_input("Элемент (например: Nb, W, B)", key="new_element")
             with col2:
-                for elem in ["V", "Cu", "S", "P", "Ti"]:
-                    min_val = st.number_input(f"{elem} мин", value=0.0, format="%.3f", key=f"min_{elem}2")
-                    max_val = st.number_input(f"{elem} макс", value=0.0, format="%.3f", key=f"max_{elem}2")
-                    if min_val > 0 or max_val > 0:
-                        elements_ranges[elem] = (min_val if min_val > 0 else None, 
-                                               max_val if max_val > 0 else None)
+                new_min = st.number_input("Мин. значение", value=0.0, format="%.3f", key="new_min")
+            with col3:
+                new_max = st.number_input("Макс. значение", value=0.0, format="%.3f", key="new_max")
             
-            if st.button("Сохранить норматив") and new_grade:
-                analyzer.standards[new_grade] = elements_ranges
-                analyzer.standards[new_grade]["source"] = new_source
-                analyzer.save_user_standards()
-                st.success(f"Норматив для {new_grade} сохранен!")
+            if st.button("Добавить элемент") and new_element:
+                st.session_state.elements.append({
+                    "element": new_element.strip(),
+                    "min": new_min if new_min > 0 else None,
+                    "max": new_max if new_max > 0 else None
+                })
+                st.rerun()
+            
+            # Отображение добавленных элементов
+            if st.session_state.elements:
+                st.write("Добавленные элементы:")
+                for i, elem_data in enumerate(st.session_state.elements):
+                    col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
+                    with col1:
+                        st.write(f"**{elem_data['element']}**")
+                    with col2:
+                        min_val = elem_data['min']
+                        st.write(f"Мин: {min_val:.3f}" if min_val else "Мин: не норм.")
+                    with col3:
+                        max_val = elem_data['max']
+                        st.write(f"Макс: {max_val:.3f}" if max_val else "Макс: не норм.")
+                    with col4:
+                        if st.button("❌", key=f"del_{i}"):
+                            st.session_state.elements.pop(i)
+                            st.rerun()
+            
+            # Кнопка сохранения
+            if st.button("💾 Сохранить норматив"):
+                if not st.session_state.elements:
+                    st.error("Добавьте хотя бы один элемент!")
+                else:
+                    # Создаем словарь с элементами
+                    elements_ranges = {}
+                    for elem_data in st.session_state.elements:
+                        elements_ranges[elem_data["element"]] = (
+                            elem_data["min"], 
+                            elem_data["max"]
+                        )
+                    
+                    elements_ranges["source"] = new_source
+                    analyzer.standards[new_grade] = elements_ranges
+                    analyzer.save_user_standards()
+                    
+                    # Очищаем session state
+                    st.session_state.elements = []
+                    
+                    st.success(f"Норматив для {new_grade} сохранен!")
+                    st.rerun()
     
     # Основная область для загрузки файлов
     st.header("Загрузка протоколов")
