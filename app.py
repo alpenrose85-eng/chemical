@@ -171,6 +171,14 @@ def evaluate_status(value, unc, norm_min, norm_max):
 def format_value(val, elem):
     return f"{val:.3f}" if elem in ["S", "P"] else f"{val:.2f}"
 
+def format_norm(norm_min, norm_max):
+    if norm_min is None:
+        return f"≤{norm_max:.3f}".replace(".", ",")
+    elif norm_max is None:
+        return f"≥{norm_min:.3f}".replace(".", ",")
+    else:
+        return f"{norm_min:.2f}–{norm_max:.2f}".replace(".", ",")
+
 # ================================
 # ГЕНЕРАЦИЯ WORD-ОТЧЁТА
 # ================================
@@ -223,20 +231,17 @@ def create_word_report(all_samples, steel_norms):
 
     # Строка норм — только для реально встреченных марок
     norm_row = table.add_row().cells
-    norm_row[0].text = "Нормы"
+    # Первый столбец — текст "Требования ТУ ..."
+    first_steel = all_samples[0]["steel"] if all_samples else "Неизвестно"
+    norm_row[0].text = f"Требования ТУ 14-3Р-55-2001 [3] для стали марки {first_steel}"
     for j, elem in enumerate(norm_elements, start=1):
         parts = []
         for sample in all_samples:
             steel = sample["steel"]
             if steel in steel_norms and elem in steel_norms[steel]:
                 nmin, nmax = steel_norms[steel][elem]
-                if nmin is None:
-                    parts.append(f"{steel}: ≤{nmax}")
-                elif nmax is None:
-                    parts.append(f"{steel}: ≥{nmin}")
-                else:
-                    parts.append(f"{steel}: {nmin}–{nmax}")
-        norm_row[j].text = "; ".join(parts) if parts else "–"
+                parts.append(format_norm(nmin, nmax))
+        norm_row[j].text = "; ".join(set(parts)) if parts else "–"
 
     # Детальный анализ
     doc.add_heading('Детальный анализ', level=1)
@@ -372,18 +377,15 @@ for _, r in df_display.iterrows():
 
 # Строка норм — только для реально используемых марок
 norm_row_html = "<tr><td><b>Нормы</b></td>"
+first_steel = all_samples[0]["steel"] if all_samples else "Неизвестно"
+norm_row_html += f"<td colspan='{len(cols_order)-1}' style='text-align:center;'>Требования ТУ 14-3Р-55-2001 [3] для стали марки {first_steel}</td></tr><tr><td>Нормы</td>"
 for elem in cols_order[1:]:
     parts = []
     for sample in all_samples:
         steel = sample["steel"]
         if steel in st.session_state.steel_norms and elem in st.session_state.steel_norms[steel]:
             nmin, nmax = st.session_state.steel_norms[steel][elem]
-            if nmin is None:
-                parts.append(f"{steel}: ≤{nmax}")
-            elif nmax is None:
-                parts.append(f"{steel}: ≥{nmin}")
-            else:
-                parts.append(f"{steel}: {nmin}–{nmax}")
+            parts.append(format_norm(nmin, nmax))
     norm_row_html += f"<td>{'; '.join(set(parts)) if parts else '–'}</td>"
 norm_row_html += "</tr>"
 html_rows.append(norm_row_html)
