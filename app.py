@@ -24,25 +24,45 @@ class SampleNameMatcher:
         self.letters = ['А', 'Б', 'В', 'Г']
     
     def parse_correct_names(self, file_content):
-        """Парсинг файла с правильными названиями образцов"""
+        """Парсинг файла с правильными названиями образцов из таблицы"""
         try:
             doc = Document(io.BytesIO(file_content))
             correct_names = []
             
-            for paragraph in doc.paragraphs:
-                text = paragraph.text.strip()
-                # Ищем строки с форматом "число   название"
-                match = re.match(r'^\s*(\d+)\s+([^\s].*)$', text)
-                if match:
-                    number = match.group(1)
-                    name = match.group(2).strip()
-                    correct_names.append({
-                        'original': name,
-                        'number': number,
-                        'surface_type': self.extract_surface_type(name),
-                        'tube_number': self.extract_tube_number(name),
-                        'letter': self.extract_letter(name)
-                    })
+            # Парсим таблицы в документе
+            for table in doc.tables:
+                for row in table.rows:
+                    if len(row.cells) >= 2:  # Как минимум 2 столбца: номер и название
+                        number_cell = row.cells[0].text.strip()
+                        name_cell = row.cells[1].text.strip()
+                        
+                        # Пропускаем пустые строки и заголовки
+                        if number_cell and name_cell and number_cell.isdigit():
+                            correct_names.append({
+                                'number': int(number_cell),
+                                'original': name_cell,
+                                'surface_type': self.extract_surface_type(name_cell),
+                                'tube_number': self.extract_tube_number(name_cell),
+                                'letter': self.extract_letter(name_cell)
+                            })
+            
+            # Если таблиц нет, пробуем парсить как обычный текст
+            if not correct_names:
+                for paragraph in doc.paragraphs:
+                    text = paragraph.text.strip()
+                    # Ищем строки с форматом "число   название"
+                    match = re.match(r'^\s*(\d+)\s+([^\s].*)$', text)
+                    if match:
+                        number = match.group(1)
+                        name = match.group(2).strip()
+                        if number.isdigit():
+                            correct_names.append({
+                                'number': int(number),
+                                'original': name,
+                                'surface_type': self.extract_surface_type(name),
+                                'tube_number': self.extract_tube_number(name),
+                                'letter': self.extract_letter(name)
+                            })
             
             return correct_names
         except Exception as e:
@@ -69,12 +89,17 @@ class SampleNameMatcher:
         if matches:
             return matches[0]
         
+        # Для формата типа "ШПП (4-1,А)" - берем первое число
+        matches = re.findall(r'(\d+)-\d+', name)
+        if matches:
+            return matches[0]
+            
         return None
     
     def extract_letter(self, name):
         """Извлечение буквы (А, Б, В, Г) из названия"""
         for letter in self.letters:
-            if f',{letter}' in name or f', {letter}' in name or f'({letter})' in name:
+            if f',{letter}' in name or f', {letter}' in name or f'({letter})' in name or f',{letter})' in name:
                 return letter
         return None
     
@@ -103,8 +128,18 @@ class SampleNameMatcher:
         # Ищем числа в названии
         numbers = re.findall(r'\d+', sample_name)
         if numbers:
-            # Берем первое найденное число как номер трубы
-            tube_number = numbers[0]
+            # Для ПС КШ берем первое число как номер трубы
+            if surface_type == 'ПС КШ':
+                tube_number = numbers[0]
+            # Для других типов пытаемся найти номер после типа
+            else:
+                # Ищем паттерн "тип (число"
+                pattern_match = re.search(r'(\d+)[_ ]', sample_name)
+                if pattern_match:
+                    tube_number = pattern_match.group(1)
+                else:
+                    # Берем первое найденное число как номер трубы
+                    tube_number = numbers[0]
         
         return {
             'original': sample_name,
@@ -355,6 +390,9 @@ class ChemicalAnalyzer:
             st.warning("Не удалось загрузить правильные названия образцов")
             return samples
         
+        # Создаем словарь для быстрого поиска по номеру
+        correct_samples_by_number = {cs['number']: cs for cs in correct_samples}
+        
         matched_samples = []
         unmatched_samples = []
         
@@ -363,14 +401,16 @@ class ChemicalAnalyzer:
             best_match = self.name_matcher.find_best_match(protocol_sample_info, correct_samples)
             
             if best_match:
-                # Создаем копию образца с исправленным названием
+                # Создаем копию образца с исправленным названием и номером
                 corrected_sample = sample.copy()
                 corrected_sample['original_name'] = sample['name']  # Сохраняем оригинальное название
                 corrected_sample['name'] = best_match['original']   # Заменяем на правильное
+                corrected_sample['correct_number'] = best_match['number']  # Сохраняем номер для сортировки
                 matched_samples.append(corrected_sample)
             else:
                 # Если совпадение не найдено, оставляем оригинальное название
                 sample['original_name'] = sample['name']  # Сохраняем для информации
+                sample['correct_number'] = None  # Нет номера для сортировки
                 unmatched_samples.append(sample)
         
         # Выводим информацию о сопоставлении
@@ -381,9 +421,12 @@ class ChemicalAnalyzer:
                 match_data = []
                 for sample in matched_samples:
                     match_data.append({
+                        'Номер': sample['correct_number'],
                         'Исходное название': sample['original_name'],
                         'Правильное название': sample['name']
                     })
+                # Сортируем по номеру
+                match_data.sort(key=lambda x: x['Номер'])
                 st.table(pd.DataFrame(match_data))
         
         if unmatched_samples:
@@ -398,6 +441,8 @@ class ChemicalAnalyzer:
                     })
                 st.table(pd.DataFrame(unmatched_data))
         
+        # Сортируем сопоставленные образцы по номеру, несопоставленные оставляем в конце
+        matched_samples.sort(key=lambda x: x['correct_number'])
         return matched_samples + unmatched_samples
     
     def check_element_compliance(self, element, value, standard):
@@ -449,13 +494,21 @@ class ChemicalAnalyzer:
                 other_elements = [elem for elem in norm_elements if elem not in main_elements + harmful_elements]
                 norm_elements = main_elements + other_elements + harmful_elements
             
+            # Сортируем образцы по correct_number (если есть)
+            grade_samples_sorted = sorted(
+                grade_samples, 
+                key=lambda x: x.get('correct_number', float('inf'))
+            )
+            
             # Создаем DataFrame
             data = []
             compliance_data = []  # Для хранения информации о соответствии
             
-            # Добавляем начальные номера
-            for idx, sample in enumerate(grade_samples):
-                row = {"№": idx + 1, "Образец": sample["name"]}
+            # Добавляем образцы
+            for idx, sample in enumerate(grade_samples_sorted):
+                # Используем correct_number для отображения, если есть
+                display_number = sample.get('correct_number', idx + 1)
+                row = {"№": display_number, "Образец": sample["name"]}
                 compliance_row = {"№": "normal", "Образец": "normal"}
                 
                 for elem in norm_elements:
@@ -477,7 +530,7 @@ class ChemicalAnalyzer:
                 data.append(row)
                 compliance_data.append(compliance_row)
             
-            # Добавляем строку с нормативами (всегда используем ТУ 14-3Р-55-2001)
+            # Добавляем строку с нормативами
             requirements_row = {"№": "", "Образец": f"Требования ТУ 14-3Р-55-2001 для стали марки {grade}"}
             requirements_compliance = {"№": "requirements", "Образец": "requirements"}
             
@@ -546,36 +599,6 @@ def apply_styling(df, compliance_data):
                 styled = styled.set_properties(subset=(i, col), **{'css': styles[idx]})
     
     return styled
-
-def reorder_samples_by_number(df, compliance_data):
-    """Переупорядочивает образцы по номеру, сохраняя строку требований внизу"""
-    if len(df) <= 1:
-        return df, compliance_data
-    
-    # Отделяем строку требований (последняя строка)
-    requirements_row = df.iloc[-1:].copy()
-    requirements_compliance = compliance_data[-1:]
-    
-    # Берем все строки кроме последней (образцы)
-    samples_df = df.iloc[:-1].copy()
-    samples_compliance = compliance_data[:-1]
-    
-    # Преобразуем номера в целые числа для правильной сортировки
-    samples_df['№'] = samples_df['№'].astype(int)
-    
-    # Сортируем образцы по номеру
-    samples_df = samples_df.sort_values('№')
-    
-    # Восстанавливаем порядок индексов
-    samples_df = samples_df.reset_index(drop=True)
-    
-    # Объединяем обратно с требованиями
-    result_df = pd.concat([samples_df, requirements_row], ignore_index=True)
-    
-    # Обновляем compliance data
-    result_compliance = samples_compliance + requirements_compliance
-    
-    return result_df, result_compliance
 
 def set_font_times_new_roman(doc):
     """Устанавливает шрифт Times New Roman для всего документа"""
@@ -723,6 +746,23 @@ def main():
         key="correct_names"
     )
     
+    if correct_names_file:
+        # Показываем preview правильных названий
+        correct_samples = analyzer.name_matcher.parse_correct_names(correct_names_file.getvalue())
+        if correct_samples:
+            st.success(f"Загружено {len(correct_samples)} правильных названий образцов")
+            with st.expander("📋 Просмотр загруженных названий"):
+                preview_data = []
+                for sample in correct_samples:
+                    preview_data.append({
+                        'Номер': sample['number'],
+                        'Название': sample['original'],
+                        'Тип': sample['surface_type'] or 'н/д',
+                        'Труба': sample['tube_number'] or 'н/д', 
+                        'Буква': sample['letter'] or 'н/д'
+                    })
+                st.table(pd.DataFrame(preview_data))
+    
     # Загрузка файлов протоколов
     st.subheader("2. Загрузите файлы протоколов химического анализа")
     uploaded_files = st.file_uploader(
@@ -766,17 +806,12 @@ def main():
             for grade, table_data in report_tables.items():
                 st.subheader(f"Марка стали: {grade}")
                 
-                # Переупорядочиваем образцы по номеру
-                reordered_df, reordered_compliance = reorder_samples_by_number(
-                    table_data["data"], table_data["compliance"]
-                )
+                # Применяем стили к таблице
+                styled_table = apply_styling(table_data["data"], table_data["compliance"])
+                st.dataframe(styled_table, use_container_width=True, hide_index=True)
                 
                 # Сохраняем для экспорта
-                export_tables[grade] = reordered_df
-                
-                # Применяем стили к переупорядоченной таблице
-                styled_table = apply_styling(reordered_df, reordered_compliance)
-                st.dataframe(styled_table, use_container_width=True, hide_index=True)
+                export_tables[grade] = table_data["data"]
             
             # Экспорт в Word
             if st.button("📄 Экспорт в Word"):
@@ -789,6 +824,8 @@ def main():
                 with st.expander(f"📋 {sample['name']} - {sample['steel_grade']}"):
                     if 'original_name' in sample:
                         st.write(f"**Исходное название:** {sample['original_name']}")
+                    if 'correct_number' in sample:
+                        st.write(f"**Номер в списке:** {sample['correct_number']}")
                     st.write(f"**Марка стали:** {sample['steel_grade']}")
                     st.write("**Химический состав:**")
                     for element, value in sample['composition'].items():
