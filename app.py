@@ -86,13 +86,17 @@ class ChemicalAnalyzer:
                     }
                     samples.append(current_sample)
                 
-                # Поиск марки стали
+                # Поиск марки стали - улучшенная версия
                 elif "Химический состав металла образца соответствует марке стали:" in text:
                     if current_sample:
-                        # Извлечение марки стали (убираем лишние символы)
+                        # Извлечение марки стали (убираем лишние символы и комментарии)
                         grade_text = text.split("марке стали:")[1].strip()
-                        # Удаляем возможные ** вокруг марки стали
+                        # Удаляем возможные ** вокруг марки стали и все что после запятой
                         grade_text = re.sub(r'\*+', '', grade_text).strip()
+                        # Берем только первую часть до запятой (основную марку стали)
+                        grade_text = grade_text.split(',')[0].strip()
+                        # Берем только первую часть до точки (если есть)
+                        grade_text = grade_text.split('.')[0].strip()
                         current_sample["steel_grade"] = grade_text
             
             # Парсинг таблиц с химическим составом
@@ -108,41 +112,42 @@ class ChemicalAnalyzer:
             return []
     
     def parse_composition_table(self, table):
-        """Парсинг таблицы с химическим составом"""
+        """Парсинг таблицы с химическим составом - улучшенная версия"""
         composition = {}
         
         try:
-            # Поиск строки со средними значениями
+            # Собираем все строки таблицы
+            all_data = []
             for row in table.rows:
-                cells = [cell.text.strip() for cell in row.cells]
-                
-                # Ищем строку, начинающуюся с "Среднее:"
-                if cells and "Среднее:" in cells[0]:
-                    # Сопоставляем элементы со значениями
-                    elements = []
-                    values = []
+                row_data = [cell.text.strip() for cell in row.cells]
+                all_data.append(row_data)
+            
+            # Ищем строку со средними значениями
+            for i, row in enumerate(all_data):
+                if row and "Среднее:" in row[0]:
+                    # Это строка со средними значениями
+                    mean_row = row
                     
-                    # Собираем заголовки элементов из предыдущих строк
-                    for prev_row in table.rows:
-                        prev_cells = [cell.text.strip() for cell in prev_row.cells]
-                        if prev_cells and prev_cells[0] in ["C", "Si", "Mn", "P", "S", "Cr", "Mo", "Ni", 
-                                                           "Cu", "Al", "Co", "Nb", "Ti", "V", "W", "Fe"]:
-                            elements = prev_cells
+                    # Ищем предыдущие строки с названиями элементов
+                    for j in range(i-1, max(i-5, -1), -1):
+                        prev_row = all_data[j]
+                        if prev_row and prev_row[0] in ["C", "Si", "Mn", "P", "S", "Cr", "Mo", "Ni", 
+                                                      "Cu", "Al", "Co", "Nb", "Ti", "V", "W", "Fe"]:
+                            # Нашли строку с элементами
+                            elements = prev_row
+                            # Сопоставляем элементы со значениями из строки средних
+                            for k, elem in enumerate(elements):
+                                if k < len(mean_row) - 1 and elem in ["C", "Si", "Mn", "P", "S", "Cr", "Mo", "Ni", 
+                                                                     "Cu", "Al", "Co", "Nb", "Ti", "V", "W", "Fe"]:
+                                    try:
+                                        # Берем значение из следующей ячейки (пропускаем "Среднее:")
+                                        val = mean_row[k + 1]
+                                        # Заменяем точку на запятую и преобразуем в float
+                                        num_val = float(val.replace(',', '.'))
+                                        composition[elem] = num_val
+                                    except (ValueError, IndexError):
+                                        continue
                             break
-                    
-                    if elements:
-                        # Берем значения из текущей строки (пропускаем первый столбец "Среднее:")
-                        values = cells[1:len(elements)]
-                        
-                        for elem, val in zip(elements, values):
-                            if elem in ["C", "Si", "Mn", "P", "S", "Cr", "Mo", "Ni", 
-                                      "Cu", "Al", "Co", "Nb", "Ti", "V", "W", "Fe"]:
-                                try:
-                                    # Заменяем точку на запятую и преобразуем в float
-                                    num_val = float(val.replace(',', '.'))
-                                    composition[elem] = num_val
-                                except ValueError:
-                                    continue
             
             return composition
             
@@ -151,7 +156,7 @@ class ChemicalAnalyzer:
             return {}
     
     def check_compliance(self, sample):
-        """Проверка соответствия нормативам"""
+        """Проверка соответствия нормативам - исправленная версия"""
         if not sample["steel_grade"] or sample["steel_grade"] not in self.standards:
             return None
         
@@ -159,12 +164,14 @@ class ChemicalAnalyzer:
         deviations = []
         borderlines = []
         
-        for element, (min_val, max_val) in standard.items():
+        for element, value_range in standard.items():
+            # Пропускаем поле 'source'
             if element == "source":
                 continue
                 
             if element in sample["composition"]:
                 actual_val = sample["composition"][element]
+                min_val, max_val = value_range
                 
                 # Проверка соответствия
                 if min_val is not None and actual_val < min_val:
@@ -199,7 +206,7 @@ class ChemicalAnalyzer:
                 continue
                 
             standard = self.standards[grade]
-            # Только нормируемые элементы
+            # Только нормируемые элементы (исключаем 'source')
             norm_elements = [elem for elem in standard.keys() if elem != "source"]
             
             # Создаем DataFrame
@@ -222,11 +229,20 @@ class ChemicalAnalyzer:
             for elem in norm_elements:
                 min_val, max_val = standard[elem]
                 if min_val is not None and max_val is not None:
-                    requirements_row[elem] = f"{min_val:.2f}-{max_val:.2f}".replace('.', ',')
+                    if elem in ["S", "P"]:
+                        requirements_row[elem] = f"{min_val:.3f}-{max_val:.3f}".replace('.', ',')
+                    else:
+                        requirements_row[elem] = f"{min_val:.2f}-{max_val:.2f}".replace('.', ',')
                 elif min_val is not None:
-                    requirements_row[elem] = f">={min_val:.2f}".replace('.', ',')
+                    if elem in ["S", "P"]:
+                        requirements_row[elem] = f">={min_val:.3f}".replace('.', ',')
+                    else:
+                        requirements_row[elem] = f">={min_val:.2f}".replace('.', ',')
                 elif max_val is not None:
-                    requirements_row[elem] = f"<={max_val:.2f}".replace('.', ',')
+                    if elem in ["S", "P"]:
+                        requirements_row[elem] = f"<={max_val:.3f}".replace('.', ',')
+                    else:
+                        requirements_row[elem] = f"<={max_val:.2f}".replace('.', ',')
                 else:
                     requirements_row[elem] = "не нормируется"
             
@@ -341,38 +357,51 @@ def main():
 
 def create_word_report(tables, samples, analyzer):
     """Создание Word отчета"""
-    doc = Document()
-    
-    # Титульная страница
-    title = doc.add_heading('Протокол анализа химического состава', 0)
-    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    
-    doc.add_paragraph(f"Дата формирования: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
-    doc.add_paragraph(f"Проанализировано образцов: {len(samples)}")
-    doc.add_paragraph("")
-    
-    # Добавляем таблицы для каждой марки стали
-    for grade, table_df in tables.items():
-        doc.add_heading(f'Марка стали: {grade}', level=1)
+    try:
+        doc = Document()
         
-        # Создаем таблицу в Word
-        word_table = doc.add_table(rows=len(table_df)+1, cols=len(table_df.columns))
-        word_table.style = 'Table Grid'
+        # Титульная страница
+        title = doc.add_heading('Протокол анализа химического состава', 0)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
         
-        # Заголовки
-        for j, col in enumerate(table_df.columns):
-            word_table.cell(0, j).text = str(col)
+        doc.add_paragraph(f"Дата формирования: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
+        doc.add_paragraph(f"Проанализировано образцов: {len(samples)}")
+        doc.add_paragraph("")
         
-        # Данные
-        for i, row in table_df.iterrows():
+        # Добавляем таблицы для каждой марки стали
+        for grade, table_df in tables.items():
+            doc.add_heading(f'Марка стали: {grade}', level=1)
+            
+            # Создаем таблицу в Word
+            word_table = doc.add_table(rows=len(table_df)+1, cols=len(table_df.columns))
+            word_table.style = 'Table Grid'
+            
+            # Заголовки
             for j, col in enumerate(table_df.columns):
-                word_table.cell(i+1, j).text = str(row[col])
+                word_table.cell(0, j).text = str(col)
+            
+            # Данные
+            for i, row in table_df.iterrows():
+                for j, col in enumerate(table_df.columns):
+                    word_table.cell(i+1, j).text = str(row[col])
+            
+            doc.add_paragraph()
         
-        doc.add_paragraph()
-    
-    # Сохраняем документ
-    doc.save("химический_анализ_отчет.docx")
-    st.success("Отчет сохранен как 'химический_анализ_отчет.docx'")
+        # Сохраняем документ
+        doc.save("химический_анализ_отчет.docx")
+        st.success("Отчет сохранен как 'химический_анализ_отчет.docx'")
+        
+        # Предоставляем ссылку для скачивания
+        with open("химический_анализ_отчет.docx", "rb") as file:
+            btn = st.download_button(
+                label="📥 Скачать отчет",
+                data=file,
+                file_name="химический_анализ_отчет.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
+            
+    except Exception as e:
+        st.error(f"Ошибка при создании Word отчета: {str(e)}")
 
 if __name__ == "__main__":
     main()
