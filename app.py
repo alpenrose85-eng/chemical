@@ -23,10 +23,10 @@ class ChemicalAnalyzer:
                 "Cr": (0.90, 1.20),
                 "Mo": (0.25, 0.35),
                 "V": (0.15, 0.30),
+                "Ni": (None, 0.30),
                 "Cu": (None, 0.30),
                 "S": (None, 0.025),
                 "P": (None, 0.030),
-                "Ni": (None, 0.30),
                 "source": "ТУ 14-3Р-55-2001"
             },
             "12Х18Н12Т": {
@@ -241,13 +241,23 @@ class ChemicalAnalyzer:
             # Только нормируемые элементы (исключаем 'source')
             norm_elements = [elem for elem in standard.keys() if elem != "source"]
             
+            # Для стали 12Х1МФ устанавливаем особый порядок столбцов
+            if grade == "12Х1МФ":
+                # Порядок: основные элементы, затем вредные примеси
+                main_elements = ["C", "Si", "Mn", "Cr", "Mo", "V", "Ni"]
+                harmful_elements = ["Cu", "S", "P"]
+                # Добавляем остальные элементы, если есть
+                other_elements = [elem for elem in norm_elements if elem not in main_elements + harmful_elements]
+                norm_elements = main_elements + other_elements + harmful_elements
+            
             # Создаем DataFrame
             data = []
             compliance_data = []  # Для хранения информации о соответствии
             
-            for sample in grade_samples:
-                row = {"Образец": sample["name"]}
-                compliance_row = {"Образец": "normal"}  # Статус для названия образца
+            # Добавляем начальные номера
+            for idx, sample in enumerate(grade_samples):
+                row = {"№": idx + 1, "Образец": sample["name"]}
+                compliance_row = {"№": "normal", "Образец": "normal"}
                 
                 for elem in norm_elements:
                     if elem in sample["composition"]:
@@ -269,8 +279,8 @@ class ChemicalAnalyzer:
                 compliance_data.append(compliance_row)
             
             # Добавляем строку с нормативами
-            requirements_row = {"Образец": f"Требования {standard.get('source', '')} для стали марки {grade}"}
-            requirements_compliance = {"Образец": "requirements"}
+            requirements_row = {"№": "", "Образец": f"Требования {standard.get('source', '')} для стали марки {grade}"}
+            requirements_compliance = {"№": "requirements", "Образец": "requirements"}
             
             for elem in norm_elements:
                 min_val, max_val = standard[elem]
@@ -299,7 +309,8 @@ class ChemicalAnalyzer:
             
             tables[grade] = {
                 "data": pd.DataFrame(data),
-                "compliance": compliance_data
+                "compliance": compliance_data,
+                "columns_order": ["№", "Образец"] + norm_elements
             }
         
         return tables
@@ -336,6 +347,33 @@ def apply_styling(df, compliance_data):
                 styled = styled.set_properties(subset=(i, col), **{'css': styles[idx]})
     
     return styled
+
+def reorder_samples_by_number(df, compliance_data):
+    """Переупорядочивает образцы по номеру, сохраняя строку требований внизу"""
+    if len(df) <= 1:
+        return df, compliance_data
+    
+    # Отделяем строку требований (последняя строка)
+    requirements_row = df.iloc[-1:].copy()
+    requirements_compliance = compliance_data[-1:]
+    
+    # Берем все строки кроме последней (образцы)
+    samples_df = df.iloc[:-1].copy()
+    samples_compliance = compliance_data[:-1]
+    
+    # Сортируем образцы по номеру
+    samples_df = samples_df.sort_values('№')
+    
+    # Восстанавливаем порядок индексов
+    samples_df = samples_df.reset_index(drop=True)
+    
+    # Объединяем обратно с требованиями
+    result_df = pd.concat([samples_df, requirements_row], ignore_index=True)
+    
+    # Обновляем compliance data
+    result_compliance = samples_compliance + requirements_compliance
+    
+    return result_df, result_compliance
 
 def main():
     st.set_page_config(page_title="Анализатор химсостава металла", layout="wide")
@@ -492,12 +530,21 @@ def main():
                 
                 # Редактирование таблицы
                 st.write("**Редактирование таблицы:**")
+                st.write("Измените номера в столбце '№' для изменения порядка образцов")
+                
                 edited_df = st.data_editor(
                     table_data["data"],
                     key=f"editor_{grade}",
                     num_rows="fixed",
                     use_container_width=True,
                     column_config={
+                        "№": st.column_config.NumberColumn(
+                            "№",
+                            help="Порядковый номер образца",
+                            min_value=1,
+                            max_value=100,
+                            step=1
+                        ),
                         "Образец": st.column_config.TextColumn(
                             "Образец",
                             help="Название образца",
@@ -506,18 +553,28 @@ def main():
                     }
                 )
                 
-                # Применяем стили к отредактированной таблице
-                styled_table = apply_styling(edited_df, table_data["compliance"])
+                # Переупорядочиваем образцы по номеру
+                reordered_df, reordered_compliance = reorder_samples_by_number(
+                    edited_df, table_data["compliance"]
+                )
+                
+                # Применяем стили к переупорядоченной таблице
+                styled_table = apply_styling(reordered_df, reordered_compliance)
                 st.write("**Таблица с визуализацией отклонений:**")
                 st.dataframe(styled_table, use_container_width=True)
             
             # Экспорт в Word
             if st.button("📄 Экспорт в Word"):
-                # Используем отредактированные данные для экспорта
+                # Используем отредактированные и переупорядоченные данные для экспорта
                 edited_tables = {}
                 for grade in report_tables.keys():
                     if f"editor_{grade}" in st.session_state:
-                        edited_tables[grade] = st.session_state[f"editor_{grade}"]
+                        edited_df = st.session_state[f"editor_{grade}"]
+                        # Переупорядочиваем для экспорта
+                        reordered_df, _ = reorder_samples_by_number(
+                            edited_df, report_tables[grade]["compliance"]
+                        )
+                        edited_tables[grade] = reordered_df
                     else:
                         edited_tables[grade] = report_tables[grade]["data"]
                 
