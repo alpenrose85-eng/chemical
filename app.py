@@ -982,21 +982,7 @@ def create_word_report(tables, samples, analyzer):
         doc.add_paragraph(f"Проанализировано образцов: {len(samples)}")
         doc.add_paragraph("")
         
-        # Легенда
-        doc.add_heading('Легенда', level=1)
-        legend_table = doc.add_table(rows=3, cols=2)
-        legend_table.style = 'Table Grid'
-        
-        legend_table.cell(0, 0).text = "Цвет"
-        legend_table.cell(0, 1).text = "Значение"
-        
-        legend_table.cell(1, 0).text = "🔴"
-        legend_table.cell(1, 1).text = "Отклонение от норм"
-        
-        legend_table.cell(2, 0).text = "⚪"
-        legend_table.cell(2, 1).text = "Нормативные требования"
-        
-        doc.add_paragraph()
+        # Убрана легенда, так как цветовые индикаторы не отображаются в Word
         
         # Добавляем таблицы для каждой марки стали
         for grade, table_df in tables.items():
