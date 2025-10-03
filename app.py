@@ -582,8 +582,48 @@ class ChemicalAnalyzer:
         
         return tables
 
+    def _filter_correct_names(self, options, filter_text, correct_samples):
+        """Фильтрация вариантов названий по номеру или букве"""
+        if not filter_text:
+            return options
+        
+        filter_text = filter_text.upper().strip()
+        filtered_options = ["Не сопоставлен"]
+        
+        # Ищем совпадения
+        for cs in correct_samples:
+            # Поиск по номеру трубы
+            if cs.get('tube_number') and filter_text in cs['tube_number']:
+                filtered_options.append(cs['original'])
+                continue
+                
+            # Поиск по номеру в списке
+            if cs.get('number') and filter_text in str(cs['number']):
+                filtered_options.append(cs['original'])
+                continue
+                
+            # Поиск по букве
+            if cs.get('letter') and filter_text == cs['letter']:
+                filtered_options.append(cs['original'])
+                continue
+                
+            # Поиск по названию (частичное совпадение)
+            if filter_text in cs['original'].upper():
+                filtered_options.append(cs['original'])
+                continue
+        
+        # Удаляем дубликаты и сохраняем порядок
+        seen = set()
+        unique_options = []
+        for option in filtered_options:
+            if option not in seen:
+                seen.add(option)
+                unique_options.append(option)
+        
+        return unique_options if unique_options else ["Не сопоставлен"]
+
 def add_manual_matching_interface(samples, correct_samples, analyzer):
-    """Интерфейс для ручного сопоставления образцов"""
+    """Интерфейс для ручного сопоставления образцов с фильтрацией"""
     st.header("🔧 Ручное сопоставление образцов")
     
     # Создаем копию samples для редактирования
@@ -601,7 +641,7 @@ def add_manual_matching_interface(samples, correct_samples, analyzer):
     manual_matches = {}
     
     for i, sample in enumerate(editable_samples):
-        col1, col2 = st.columns([2, 3])
+        col1, col2, col3 = st.columns([2, 2, 3])
         
         with col1:
             st.write(f"**{sample.get('original_name', sample['name'])}**")
@@ -609,14 +649,25 @@ def add_manual_matching_interface(samples, correct_samples, analyzer):
                 st.write(f"*Марка: {sample['steel_grade']}*")
         
         with col2:
+            # Поле для фильтрации
+            filter_text = st.text_input(
+                "🔍 Фильтр (номер/буква)",
+                placeholder="Например: 4, А, 12",
+                key=f"filter_{i}"
+            )
+        
+        with col3:
             # Определяем текущее сопоставление
             current_match = sample['name'] if sample['name'] in correct_names_list else "Не сопоставлен"
             
-            # Выпадающий список
+            # Фильтруем варианты на основе введенного текста
+            filtered_options = analyzer._filter_correct_names(options, filter_text, correct_samples)
+            
+            # Выпадающий список с отфильтрованными вариантами
             selected = st.selectbox(
                 f"Выберите правильное название для образца {i+1}",
-                options=options,
-                index=options.index(current_match) if current_match in options else 0,
+                options=filtered_options,
+                index=filtered_options.index(current_match) if current_match in filtered_options else 0,
                 key=f"manual_match_{i}"
             )
             
