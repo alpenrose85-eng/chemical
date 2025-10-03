@@ -671,7 +671,8 @@ def add_manual_matching_interface(samples, correct_samples, analyzer):
             current_match = sample['name'] if sample['name'] in correct_names_list else "Не сопоставлен"
             
             # Фильтруем варианты на основе введенного текста
-            filtered_options = analyzer._filter_correct_names(options, filter_text, correct_samples)
+            # ИСПРАВЛЕНИЕ: используем name_matcher из analyzer
+            filtered_options = analyzer.name_matcher._filter_correct_names(options, filter_text, correct_samples)
             
             # Выпадающий список с отфильтрованными вариантами
             selected = st.selectbox(
