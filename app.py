@@ -627,8 +627,6 @@ def add_manual_matching_interface(samples, correct_samples, analyzer):
     st.header("🔧 Ручное сопоставление образцов")
     
     # Используем session_state для хранения результатов ручного сопоставления
-    if 'manual_matches_applied' not in st.session_state:
-        st.session_state.manual_matches_applied = False
     if 'manually_matched_samples' not in st.session_state:
         st.session_state.manually_matched_samples = samples.copy()
     
@@ -704,10 +702,10 @@ def add_manual_matching_interface(samples, correct_samples, analyzer):
         
         # Сохраняем результаты в session_state
         st.session_state.manually_matched_samples = updated_samples
-        st.session_state.manual_matches_applied = True
+        st.session_state.final_samples = updated_samples
         
         st.success(f"Ручное сопоставление применено! Обновлено {len(manual_matches)} образцов.")
-        st.experimental_rerun()
+        # Убираем st.experimental_rerun() чтобы избежать ошибки
     
     return st.session_state.manually_matched_samples
 
