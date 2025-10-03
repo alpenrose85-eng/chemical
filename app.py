@@ -395,13 +395,13 @@ class ChemicalAnalyzer:
     def match_sample_names(self, samples, correct_names_file):
         """Сопоставление названий образцов с правильными названиями"""
         if not correct_names_file:
-            return samples
+            return samples, []
         
         correct_samples = self.name_matcher.parse_correct_names(correct_names_file.getvalue())
         
         if not correct_samples:
             st.warning("Не удалось загрузить правильные названия образцов")
-            return samples
+            return samples, []
         
         matched_samples = []
         unmatched_samples = []
@@ -458,7 +458,7 @@ class ChemicalAnalyzer:
         return matched_samples + unmatched_samples, correct_samples
     
     def check_element_compliance(self, element, value, standard):
-        """Проверка соответствия элемента нормативам - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
+        """Проверка соответствия элемента нормативам - УПРОЩЕННАЯ ВЕРСИЯ"""
         if element not in standard or element == "source":
             return "normal"
         
@@ -469,12 +469,6 @@ class ChemicalAnalyzer:
             return "deviation"
         elif max_val is not None and value > max_val:
             return "deviation"
-        
-        # Проверка на пограничные значения (только если значение в норме)
-        elif min_val is not None and value <= min_val * 1.05 and value >= min_val:
-            return "borderline"
-        elif max_val is not None and value >= max_val * 0.95 and value <= max_val:
-            return "borderline"
         else:
             return "normal"
     
@@ -670,8 +664,6 @@ def apply_styling(df, compliance_data):
                     status = compliance_row[col]
                     if status == "deviation":
                         styles.append(f"background-color: #ffcccc; color: #cc0000; font-weight: bold;")  # Красный
-                    elif status == "borderline":
-                        styles.append(f"background-color: #fffacd; color: #b8860b;")  # Желтый
                     elif status == "requirements":
                         styles.append(f"background-color: #f0f0f0; font-style: italic;")  # Серый для требований
                     else:
@@ -886,7 +878,6 @@ def main():
             st.markdown("""
             **Легенда:**
             - <span style='background-color: #ffcccc; padding: 2px 5px; border-radius: 3px;'>🔴 Красный</span> - отклонение от норм
-            - <span style='background-color: #fffacd; padding: 2px 5px; border-radius: 3px;'>🟡 Желтый</span> - пограничное значение
             - <span style='background-color: #f0f0f0; padding: 2px 5px; border-radius: 3px;'>⚪ Серый</span> - нормативные требования
             """, unsafe_allow_html=True)
             
@@ -942,7 +933,7 @@ def create_word_report(tables, samples, analyzer):
         
         # Легенда
         doc.add_heading('Легенда', level=1)
-        legend_table = doc.add_table(rows=4, cols=2)
+        legend_table = doc.add_table(rows=3, cols=2)
         legend_table.style = 'Table Grid'
         
         legend_table.cell(0, 0).text = "Цвет"
@@ -951,11 +942,8 @@ def create_word_report(tables, samples, analyzer):
         legend_table.cell(1, 0).text = "🔴"
         legend_table.cell(1, 1).text = "Отклонение от норм"
         
-        legend_table.cell(2, 0).text = "🟡" 
-        legend_table.cell(2, 1).text = "Пограничное значение"
-        
-        legend_table.cell(3, 0).text = "⚪"
-        legend_table.cell(3, 1).text = "Нормативные требования"
+        legend_table.cell(2, 0).text = "⚪"
+        legend_table.cell(2, 1).text = "Нормативные требования"
         
         doc.add_paragraph()
         
