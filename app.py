@@ -512,10 +512,10 @@ class ChemicalAnalyzer:
             data = []
             compliance_data = []  # Для хранения информации о соответствии
             
-            # Добавляем образцы
-            for idx, sample in enumerate(grade_samples_sorted):
-                # Используем correct_number для отображения, если есть
-                display_number = sample.get('correct_number', idx + 1)
+            # Добавляем образцы - нумерация начинается с 1 для каждой таблицы
+            for idx, sample in enumerate(grade_samples_sorted, 1):
+                # Используем порядковый номер в таблице (начинается с 1)
+                display_number = idx
                 
                 # Добавляем колонку с исходным названием
                 original_name = sample.get('original_name', '')
