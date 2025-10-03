@@ -626,8 +626,14 @@ def add_manual_matching_interface(samples, correct_samples, analyzer):
     """Интерфейс для ручного сопоставления образцов с фильтрацией"""
     st.header("🔧 Ручное сопоставление образцов")
     
+    # Используем session_state для хранения результатов ручного сопоставления
+    if 'manual_matches_applied' not in st.session_state:
+        st.session_state.manual_matches_applied = False
+    if 'manually_matched_samples' not in st.session_state:
+        st.session_state.manually_matched_samples = samples.copy()
+    
     # Создаем копию samples для редактирования
-    editable_samples = samples.copy()
+    editable_samples = st.session_state.manually_matched_samples.copy()
     
     # Создаем словарь для быстрого доступа к правильным названиям
     correct_names_dict = {cs['original']: cs for cs in correct_samples}
@@ -696,10 +702,14 @@ def add_manual_matching_interface(samples, correct_samples, analyzer):
                 sample['manually_matched'] = False
                 updated_samples.append(sample)
         
+        # Сохраняем результаты в session_state
+        st.session_state.manually_matched_samples = updated_samples
+        st.session_state.manual_matches_applied = True
+        
         st.success(f"Ручное сопоставление применено! Обновлено {len(manual_matches)} образцов.")
-        return updated_samples
+        st.experimental_rerun()
     
-    return editable_samples
+    return st.session_state.manually_matched_samples
 
 def apply_styling(df, compliance_data):
     """Применяет стили к DataFrame на основе данных о соответствии"""
@@ -756,6 +766,10 @@ def set_font_times_new_roman(doc):
 def main():
     st.set_page_config(page_title="Анализатор химсостава металла", layout="wide")
     st.title("🔬 Анализатор химического состава металла")
+    
+    # Инициализация session_state для хранения образцов
+    if 'final_samples' not in st.session_state:
+        st.session_state.final_samples = None
     
     analyzer = ChemicalAnalyzer()
     
@@ -918,11 +932,21 @@ def main():
             st.subheader("🔍 Автоматическое сопоставление названий образцов")
             all_samples, correct_samples_loaded = analyzer.match_sample_names(all_samples, correct_names_file)
             
+            # Сохраняем автоматически сопоставленные образцы в session_state
+            if st.session_state.final_samples is None:
+                st.session_state.final_samples = all_samples
+            
             # Показываем интерфейс ручного сопоставления
-            all_samples = add_manual_matching_interface(all_samples, correct_samples_loaded, analyzer)
+            st.session_state.final_samples = add_manual_matching_interface(
+                st.session_state.final_samples, correct_samples_loaded, analyzer
+            )
+        else:
+            # Если нет файла с правильными названиями, используем исходные образцы
+            if st.session_state.final_samples is None:
+                st.session_state.final_samples = all_samples
         
         # Анализ и отображение результатов
-        if all_samples:
+        if st.session_state.final_samples:
             st.header("Результаты анализа")
             
             # Легенда цветов
@@ -933,7 +957,7 @@ def main():
             """, unsafe_allow_html=True)
             
             # Создание таблиц для отчета
-            report_tables = analyzer.create_report_table_with_original_names(all_samples)
+            report_tables = analyzer.create_report_table_with_original_names(st.session_state.final_samples)
             
             # Подготовка данных для экспорта
             export_tables = {}
@@ -950,12 +974,12 @@ def main():
             
             # Экспорт в Word
             if st.button("📄 Экспорт в Word"):
-                create_word_report(export_tables, all_samples, analyzer)
+                create_word_report(export_tables, st.session_state.final_samples, analyzer)
                 st.success("Отчет готов к скачиванию!")
             
             # Раздел с обработанными образцами (в самом конце)
             st.header("Обработанные образцы")
-            for sample in all_samples:
+            for sample in st.session_state.final_samples:
                 with st.expander(f"📋 {sample['name']} - {sample['steel_grade']}"):
                     if 'original_name' in sample:
                         st.write(f"**Исходное название:** {sample['original_name']}")
