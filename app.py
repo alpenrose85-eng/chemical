@@ -384,7 +384,7 @@ class ChemicalAnalyzer:
             # Парсинг таблиц с химическим составом
             for i, table in enumerate(doc.tables):
                 if i < len(samples):
-                    composition = self.parse_composition_table_improved(table)
+                    composition = self.parse_composition_table_fixed(table)
                     samples[i]["composition"] = composition
             
             # Отладочная информация
@@ -408,79 +408,72 @@ class ChemicalAnalyzer:
             st.error(f"Детали ошибки: {traceback.format_exc()}")
             return []
     
-    def parse_composition_table_improved(self, table):
-        """Улучшенный парсинг таблицы с химическим составом"""
+    def parse_composition_table_fixed(self, table):
+        """Упрощенный и надежный парсинг таблицы с химическим составом"""
         composition = {}
         
         try:
             # Собираем все данные из таблицы
             all_data = []
             for row in table.rows:
-                row_data = [cell.text.strip() for cell in row.cells if cell.text.strip()]
-                if row_data:  # Только непустые строки
-                    all_data.append(row_data)
+                row_data = [cell.text.strip() for cell in row.cells]
+                all_data.append(row_data)
             
-            if not all_data:
-                return composition
-            
-            # Все возможные элементы для поиска
-            all_elements = ["C", "Si", "Mn", "P", "S", "Cr", "Mo", "Ni", 
+            # Стандартный порядок элементов в таблицах вашего документа
+            element_order = ["C", "Si", "Mn", "P", "S", "Cr", "Mo", "Ni", 
                            "Cu", "Al", "Co", "Nb", "Ti", "V", "W", "Fe"]
             
-            # Ищем строки с элементами и значениями
-            elements_found = []
-            values_found = []
-            
-            # Проходим по всем строкам и ищем химические элементы
-            for row in all_data:
-                for cell in row:
-                    # Ищем обозначения элементов
-                    if cell in all_elements:
-                        elements_found.append(cell)
-            
             # Ищем строку со средними значениями
+            avg_row = None
+            
+            # Сначала ищем строку с меткой "Среднее:"
             for i, row in enumerate(all_data):
-                # Ищем строку, где большинство ячеек - числа
-                numeric_count = 0
                 for cell in row:
-                    try:
-                        # Пробуем преобразовать в число (учитываем формат с запятой)
-                        cell_clean = cell.replace(',', '.').replace('±', ' ').split()[0]
-                        float(cell_clean)
-                        numeric_count += 1
-                    except:
-                        pass
-                
-                if numeric_count >= 5:  # Если хотя бы 5 чисел в строке
-                    values_found = row
+                    if "Среднее:" in cell:
+                        # Средние значения находятся в этой строке
+                        avg_row = row
+                        break
+                if avg_row:
                     break
             
-            # Альтернативный подход: берем предпоследнюю строку (часто там средние значения)
-            if not values_found and len(all_data) >= 2:
-                values_found = all_data[-2]  # Предпоследняя строка
-            
-            # Если не нашли значения, попробуем найти строку со словом "Среднее"
-            if not values_found:
-                for i, row in enumerate(all_data):
-                    if any('Среднее' in cell for cell in row):
-                        if i+1 < len(all_data):
-                            values_found = all_data[i+1]
+            # Если не нашли, ищем строку с числами в правильном формате
+            if not avg_row:
+                for i in range(len(all_data)-1, -1, -1):
+                    row = all_data[i]
+                    # Проверяем, есть ли в строке достаточно чисел
+                    num_count = 0
+                    for cell in row:
+                        try:
+                            # Пробуем преобразовать в число
+                            cell_clean = cell.replace(',', '.').replace('±', ' ').split()[0]
+                            float(cell_clean)
+                            num_count += 1
+                        except:
+                            pass
+                    
+                    if num_count >= 8:  # Если достаточно чисел, считаем это строкой со значениями
+                        avg_row = row
                         break
             
-            # Сопоставляем элементы со значениями по позициям
-            if elements_found and values_found:
-                # Простой подход: предполагаем стандартный порядок элементов
-                standard_elements = ["C", "Si", "Mn", "P", "S", "Cr", "Mo", "Ni", 
-                                   "Cu", "Al", "Co", "Nb", "Ti", "V", "W", "Fe"]
-                
-                for idx, elem in enumerate(standard_elements):
-                    if idx < len(values_found):
-                        value_str = values_found[idx]
+            # Если все еще не нашли, используем строку 5 (по опыту вашего документа)
+            if not avg_row and len(all_data) > 5:
+                avg_row = all_data[5]
+            
+            if not avg_row:
+                st.warning("Не удалось найти строку со средними значениями в таблице")
+                return composition
+            
+            # Извлекаем значения по позициям
+            for idx, element in enumerate(element_order):
+                if idx < len(avg_row):
+                    value_str = avg_row[idx].strip()
+                    if value_str:
                         try:
+                            # Очищаем и преобразуем значение
                             value_str = value_str.replace(',', '.').replace('±', ' ').split()[0]
                             value = float(value_str)
-                            composition[elem] = value
-                        except:
+                            composition[element] = value
+                        except (ValueError, IndexError):
                             continue
             
             return composition
