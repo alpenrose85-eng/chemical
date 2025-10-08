@@ -384,7 +384,7 @@ class ChemicalAnalyzer:
             # Парсинг таблиц с химическим составом
             for i, table in enumerate(doc.tables):
                 if i < len(samples):
-                    composition = self.parse_composition_table_fixed(table)
+                    composition = self.parse_composition_table_corrected(table)
                     samples[i]["composition"] = composition
             
             # Отладочная информация
@@ -408,8 +408,8 @@ class ChemicalAnalyzer:
             st.error(f"Детали ошибки: {traceback.format_exc()}")
             return []
     
-    def parse_composition_table_fixed(self, table):
-        """Упрощенный и надежный парсинг таблицы с химическим составом"""
+    def parse_composition_table_corrected(self, table):
+        """Правильный парсинг таблицы с химическим составом - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
         composition = {}
         
         try:
@@ -419,57 +419,155 @@ class ChemicalAnalyzer:
                 row_data = [cell.text.strip() for cell in row.cells]
                 all_data.append(row_data)
             
-            # Стандартный порядок элементов в таблицах вашего документа
-            element_order = ["C", "Si", "Mn", "P", "S", "Cr", "Mo", "Ni", 
-                           "Cu", "Al", "Co", "Nb", "Ti", "V", "W", "Fe"]
-            
-            # Ищем строку со средними значениями
-            avg_row = None
-            
-            # Сначала ищем строку с меткой "Среднее:"
+            # Отладочная информация о таблице
+            debug_info = []
             for i, row in enumerate(all_data):
-                for cell in row:
-                    if "Среднее:" in cell:
-                        # Средние значения находятся в этой строке
-                        avg_row = row
-                        break
-                if avg_row:
+                debug_info.append(f"Строка {i}: {row}")
+            
+            # Ищем строку с заголовками элементов (первая группа)
+            header_row_idx = None
+            elements_first_group = ["C", "Si", "Mn", "P", "S", "Cr", "Mo", "Ni"]
+            
+            for i, row in enumerate(all_data):
+                # Ищем строку, где есть несколько элементов из первой группы
+                found_elements = [elem for elem in elements_first_group if any(elem in cell for cell in row)]
+                if len(found_elements) >= 3:  # Если нашли хотя бы 3 элемента
+                    header_row_idx = i
                     break
             
-            # Если не нашли, ищем строку с числами в правильном формате
-            if not avg_row:
-                for i in range(len(all_data)-1, -1, -1):
+            if header_row_idx is None:
+                st.warning("Не найдена строка с заголовками элементов")
+                return composition
+            
+            # Ищем строку со средними значениями для первой группы
+            avg_row_idx_first = None
+            for i in range(header_row_idx + 1, min(header_row_idx + 6, len(all_data))):
+                row = all_data[i]
+                # Проверяем, есть ли в строке числовые значения
+                numeric_count = 0
+                for cell in row:
+                    try:
+                        cell_clean = cell.replace(',', '.').replace('±', ' ').split()[0]
+                        float(cell_clean)
+                        numeric_count += 1
+                    except:
+                        pass
+                
+                if numeric_count >= 5:  # Если достаточно чисел
+                    avg_row_idx_first = i
+                    break
+            
+            # Ищем строку с заголовками элементов (вторая группа)
+            header_row_idx_second = None
+            elements_second_group = ["Cu", "Al", "Co", "Nb", "Ti", "V", "W", "Fe"]
+            
+            for i in range(avg_row_idx_first if avg_row_idx_first else header_row_idx + 1, len(all_data)):
+                row = all_data[i]
+                # Ищем строку, где есть несколько элементов из второй группы
+                found_elements = [elem for elem in elements_second_group if any(elem in cell for cell in row)]
+                if len(found_elements) >= 3:  # Если нашли хотя бы 3 элемента
+                    header_row_idx_second = i
+                    break
+            
+            # Ищем строку со средними значениями для второй группы
+            avg_row_idx_second = None
+            if header_row_idx_second:
+                for i in range(header_row_idx_second + 1, min(header_row_idx_second + 6, len(all_data))):
                     row = all_data[i]
-                    # Проверяем, есть ли в строке достаточно чисел
-                    num_count = 0
+                    # Проверяем, есть ли в строке числовые значения
+                    numeric_count = 0
                     for cell in row:
                         try:
-                            # Пробуем преобразовать в число
                             cell_clean = cell.replace(',', '.').replace('±', ' ').split()[0]
                             float(cell_clean)
-                            num_count += 1
+                            numeric_count += 1
                         except:
                             pass
                     
-                    if num_count >= 8:  # Если достаточно чисел, считаем это строкой со значениями
-                        avg_row = row
+                    if numeric_count >= 5:  # Если достаточно чисел
+                        avg_row_idx_second = i
                         break
             
-            # Если все еще не нашли, используем строку 5 (по опыту вашего документа)
-            if not avg_row and len(all_data) > 5:
-                avg_row = all_data[5]
+            # Извлекаем значения для первой группы элементов
+            if header_row_idx is not None and avg_row_idx_first is not None:
+                headers_first = all_data[header_row_idx]
+                values_first = all_data[avg_row_idx_first]
+                
+                # Сопоставляем заголовки со значениями
+                for i, header in enumerate(headers_first):
+                    if i < len(values_first):
+                        for element in elements_first_group:
+                            if element in header:
+                                value_str = values_first[i]
+                                try:
+                                    value_str = value_str.replace(',', '.').replace('±', ' ').split()[0]
+                                    value = float(value_str)
+                                    composition[element] = value
+                                    break
+                                except (ValueError, IndexError):
+                                    continue
             
-            if not avg_row:
-                st.warning("Не удалось найти строку со средними значениями в таблице")
-                return composition
+            # Извлекаем значения для второй группы элементов
+            if header_row_idx_second is not None and avg_row_idx_second is not None:
+                headers_second = all_data[header_row_idx_second]
+                values_second = all_data[avg_row_idx_second]
+                
+                # Сопоставляем заголовки со значениями
+                for i, header in enumerate(headers_second):
+                    if i < len(values_second):
+                        for element in elements_second_group:
+                            if element in header:
+                                value_str = values_second[i]
+                                try:
+                                    value_str = value_str.replace(',', '.').replace('±', ' ').split()[0]
+                                    value = float(value_str)
+                                    composition[element] = value
+                                    break
+                                except (ValueError, IndexError):
+                                    continue
             
-            # Извлекаем значения по позициям
-            for idx, element in enumerate(element_order):
-                if idx < len(avg_row):
-                    value_str = avg_row[idx].strip()
-                    if value_str:
+            # Альтернативный подход: если не нашли значения по заголовкам, используем фиксированные позиции
+            if not composition:
+                composition = self.parse_composition_by_fixed_positions(all_data)
+            
+            return composition
+            
+        except Exception as e:
+            st.error(f"Ошибка при парсинге таблицы: {str(e)}")
+            return {}
+    
+    def parse_composition_by_fixed_positions(self, all_data):
+        """Парсинг состава по фиксированным позициям (резервный метод)"""
+        composition = {}
+        
+        try:
+            # Стандартные позиции элементов в таблицах вашего документа
+            # Первая группа: строки 0-6, вторая группа: строки 7-13
+            
+            # Первая группа элементов (C, Si, Mn, P, S, Cr, Mo, Ni)
+            if len(all_data) > 5:
+                first_group_row = all_data[5]  # Строка со средними для первой группы
+                elements_first = ["C", "Si", "Mn", "P", "S", "Cr", "Mo", "Ni"]
+                
+                for i, element in enumerate(elements_first):
+                    if i < len(first_group_row):
+                        value_str = first_group_row[i]
                         try:
-                            # Очищаем и преобразуем значение
+                            value_str = value_str.replace(',', '.').replace('±', ' ').split()[0]
+                            value = float(value_str)
+                            composition[element] = value
+                        except (ValueError, IndexError):
+                            continue
+            
+            # Вторая группа элементов (Cu, Al, Co, Nb, Ti, V, W, Fe)
+            if len(all_data) > 12:
+                second_group_row = all_data[12]  # Строка со средними для второй группы
+                elements_second = ["Cu", "Al", "Co", "Nb", "Ti", "V", "W", "Fe"]
+                
+                for i, element in enumerate(elements_second):
+                    if i < len(second_group_row):
+                        value_str = second_group_row[i]
+                        try:
                             value_str = value_str.replace(',', '.').replace('±', ' ').split()[0]
                             value = float(value_str)
                             composition[element] = value
@@ -479,7 +577,7 @@ class ChemicalAnalyzer:
             return composition
             
         except Exception as e:
-            st.error(f"Ошибка при парсинге таблицы: {str(e)}")
+            st.error(f"Ошибка при парсинге таблицы фиксированным методом: {str(e)}")
             return {}
     
     def match_sample_names(self, samples, correct_names_file):
@@ -675,6 +773,9 @@ class ChemicalAnalyzer:
             }
         
         return tables
+
+# Остальные функции (add_manual_matching_interface, add_manual_steel_grade_correction, apply_styling, set_font_times_new_roman, create_word_report, main) 
+# остаются без изменений, как в предыдущем коде
 
 def add_manual_matching_interface(samples, correct_samples, analyzer):
     """Интерфейс для ручного сопоставления образцов с фильтрацией - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
