@@ -189,7 +189,7 @@ class SampleNameMatcher:
             protocol_sample['letter'] == correct_sample['letter']):
             score += 1
         
-        # ДОПОЛНИТЕЛЬНО: если номер трубы и буква совпадают, но тип поверхности разный,
+        # ДОПОЛНИТЕЛЬНО: если номер труба и буква совпадают, но тип поверхности разный,
         # даем шанс на сопоставление (особенно для ПС КШ / труба_ПТКМ)
         if (protocol_sample['tube_number'] and correct_sample['tube_number'] and
             protocol_sample['letter'] and correct_sample['letter'] and
@@ -384,7 +384,7 @@ class ChemicalAnalyzer:
             # Парсинг таблиц с химическим составом
             for i, table in enumerate(doc.tables):
                 if i < len(samples):
-                    composition = self.parse_composition_table(table)
+                    composition = self.parse_composition_table_improved(table)
                     samples[i]["composition"] = composition
             
             # Отладочная информация
@@ -408,85 +408,79 @@ class ChemicalAnalyzer:
             st.error(f"Детали ошибки: {traceback.format_exc()}")
             return []
     
-    def parse_composition_table(self, table):
-        """Парсинг таблицы с химическим составом - УЛУЧШЕННАЯ ВЕРСИЯ"""
+    def parse_composition_table_improved(self, table):
+        """Улучшенный парсинг таблицы с химическим составом"""
         composition = {}
         
         try:
-            # Преобразуем таблицу в список строк
-            table_data = []
+            # Собираем все данные из таблицы
+            all_data = []
             for row in table.rows:
-                row_data = [cell.text.strip() for cell in row.cells]
-                table_data.append(row_data)
+                row_data = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                if row_data:  # Только непустые строки
+                    all_data.append(row_data)
+            
+            if not all_data:
+                return composition
             
             # Все возможные элементы для поиска
             all_elements = ["C", "Si", "Mn", "P", "S", "Cr", "Mo", "Ni", 
                            "Cu", "Al", "Co", "Nb", "Ti", "V", "W", "Fe"]
             
+            # Ищем строки с элементами и значениями
+            elements_found = []
+            values_found = []
+            
+            # Проходим по всем строкам и ищем химические элементы
+            for row in all_data:
+                for cell in row:
+                    # Ищем обозначения элементов
+                    if cell in all_elements:
+                        elements_found.append(cell)
+            
             # Ищем строку со средними значениями
-            avg_row_idx = None
-            for i, row in enumerate(table_data):
-                row_text = ' '.join(row).lower()
-                if any(keyword in row_text for keyword in ['среднее', 'средн']):
-                    avg_row_idx = i
+            for i, row in enumerate(all_data):
+                # Ищем строку, где большинство ячеек - числа
+                numeric_count = 0
+                for cell in row:
+                    try:
+                        # Пробуем преобразовать в число (учитываем формат с запятой)
+                        cell_clean = cell.replace(',', '.').replace('±', ' ').split()[0]
+                        float(cell_clean)
+                        numeric_count += 1
+                    except:
+                        pass
+                
+                if numeric_count >= 5:  # Если хотя бы 5 чисел в строке
+                    values_found = row
                     break
             
-            # Если не нашли строку со "среднее", берем строку с числовыми значениями
-            if avg_row_idx is None:
-                for i in range(len(table_data)-1, max(-1, len(table_data)-4), -1):
-                    if i >= 0:
-                        row = table_data[i]
-                        # Проверяем, есть ли в строке числа
-                        numeric_count = 0
-                        for cell in row:
-                            try:
-                                cell_clean = cell.replace(',', '.').replace('±', ' ').split()[0]
-                                float(cell_clean)
-                                numeric_count += 1
-                            except:
-                                pass
-                        
-                        if numeric_count >= 5:  # Если хотя бы 5 чисел в строке
-                            avg_row_idx = i
-                            break
+            # Альтернативный подход: берем предпоследнюю строку (часто там средние значения)
+            if not values_found and len(all_data) >= 2:
+                values_found = all_data[-2]  # Предпоследняя строка
             
-            if avg_row_idx is None:
-                st.warning("Не найдена строка со средними значениями в таблице")
-                return composition
-            
-            # Ищем строку с заголовками элементов
-            header_row_idx = None
-            for i in range(avg_row_idx-1, max(-1, avg_row_idx-4), -1):
-                if i >= 0:
-                    row = table_data[i]
-                    # Проверяем, есть ли в строке известные элементы
-                    found_elements = [elem for elem in all_elements if any(elem in cell for cell in row)]
-                    if found_elements:
-                        header_row_idx = i
+            # Если не нашли значения, попробуем найти строку со словом "Среднее"
+            if not values_found:
+                for i, row in enumerate(all_data):
+                    if any('Среднее' in cell for cell in row):
+                        if i+1 < len(all_data):
+                            values_found = all_data[i+1]
                         break
             
-            if header_row_idx is None:
-                st.warning("Не найдена строка с заголовками элементов в таблице")
-                return composition
-            
-            # Извлекаем значения
-            headers = table_data[header_row_idx]
-            values = table_data[avg_row_idx]
-            
-            for i, header in enumerate(headers):
-                if i < len(values):
-                    element = header.strip()
-                    value_str = values[i].strip()
-                    
-                    if element in all_elements and value_str:
+            # Сопоставляем элементы со значениями по позициям
+            if elements_found and values_found:
+                # Простой подход: предполагаем стандартный порядок элементов
+                standard_elements = ["C", "Si", "Mn", "P", "S", "Cr", "Mo", "Ni", 
+                                   "Cu", "Al", "Co", "Nb", "Ti", "V", "W", "Fe"]
+                
+                for idx, elem in enumerate(standard_elements):
+                    if idx < len(values_found):
+                        value_str = values_found[idx]
                         try:
-                            # Очищаем и преобразуем значение
-                            value_str = value_str.replace(',', '.').replace(' ', '')
-                            if '±' in value_str:
-                                value_str = value_str.split('±')[0]
+                            value_str = value_str.replace(',', '.').replace('±', ' ').split()[0]
                             value = float(value_str)
-                            composition[element] = value
-                        except (ValueError, IndexError):
+                            composition[elem] = value
+                        except:
                             continue
             
             return composition
@@ -560,7 +554,8 @@ class ChemicalAnalyzer:
                 st.table(pd.DataFrame(unmatched_data))
         
         # Сортируем сопоставленные образцы по номеру, несопоставленные оставляем в конце
-        matched_samples.sort(key=lambda x: x['correct_number'])
+        # ИСПРАВЛЕНИЕ: избегаем сравнения None с int
+        matched_samples.sort(key=lambda x: x['correct_number'] if x['correct_number'] is not None else float('inf'))
         return matched_samples + unmatched_samples, correct_samples
     
     def check_element_compliance(self, element, value, standard):
@@ -608,10 +603,10 @@ class ChemicalAnalyzer:
                 other_elements = [elem for elem in norm_elements if elem not in main_elements + harmful_elements]
                 norm_elements = main_elements + other_elements + harmful_elements
             
-            # Сортируем образцы по correct_number (если есть)
+            # ИСПРАВЛЕНИЕ: сортируем образцы, избегая сравнения None с int
             grade_samples_sorted = sorted(
                 grade_samples, 
-                key=lambda x: x.get('correct_number', float('inf'))
+                key=lambda x: x.get('correct_number', float('inf')) if x.get('correct_number') is not None else float('inf')
             )
             
             # Создаем DataFrame с колонкой исходных названий
@@ -1160,6 +1155,8 @@ def main():
                     if st.button("📄 Экспорт в Word"):
                         create_word_report(export_tables, st.session_state.final_samples, analyzer)
                         st.success("Отчет готов к скачиванию!")
+                else:
+                    st.warning("Не удалось создать таблицы отчета. Проверьте данные образцов.")
                 
                 # Раздел с обработанными образцами (в самом конце)
                 st.header("Обработанные образцы")
@@ -1176,6 +1173,8 @@ def main():
                 
     except Exception as e:
         st.error(f"Произошла ошибка при запуске приложения: {str(e)}")
+        import traceback
+        st.error(f"Детали ошибки: {traceback.format_exc()}")
         st.info("Попробуйте обновить страницу и загрузить файлы заново")
 
 if __name__ == "__main__":
