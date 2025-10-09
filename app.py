@@ -17,13 +17,12 @@ class SampleNameMatcher:
         self.surface_types = {
             'ЭПК': ['ЭПК'],
             'ШПП': ['ШПП'],
-            'ПС КШ': ['ПС КШ', 'ПТ КШ', 'ПТКМ', 'ПТ КМ', 'ПТКМ'],
+            'ПС КШ': ['ПС КШ', 'ПТ КШ', 'труба_ПТКМ', 'труба ПТКМ', 'ПТКМ', 'труба'],
             'КПП ВД': ['КПП ВД', 'ВД'],
             'КПП НД-1': ['КПП НД-1', 'КПП НД-I', 'НД-1', 'НД-I'],
             'КПП НД-2': ['КПП НД-2', 'КПП НД-II', 'НД-2', 'НД-II']
         }
         self.letters = ['А', 'Б', 'В', 'Г']
-        self.roman_to_arabic = {'I': '1', 'II': '2', 'III': '3', 'IV': '4'}
     
     def parse_correct_names(self, file_content):
         """Парсинг файла с правильными названиями образцов из таблицы"""
@@ -31,14 +30,12 @@ class SampleNameMatcher:
             doc = Document(io.BytesIO(file_content))
             correct_names = []
             
-            # Парсим таблицы в документе
             for table in doc.tables:
                 for row in table.rows:
-                    if len(row.cells) >= 2:  # Как минимум 2 столбца: номер и название
+                    if len(row.cells) >= 2:
                         number_cell = row.cells[0].text.strip()
                         name_cell = row.cells[1].text.strip()
                         
-                        # Пропускаем пустые строки и заголовки
                         if number_cell and name_cell and number_cell.isdigit():
                             correct_names.append({
                                 'number': int(number_cell),
@@ -48,11 +45,9 @@ class SampleNameMatcher:
                                 'letter': self.extract_letter(name_cell)
                             })
             
-            # Если таблиц нет, пробуем парсить как обычный текст
             if not correct_names:
                 for paragraph in doc.paragraphs:
                     text = paragraph.text.strip()
-                    # Ищем строки с форматом "число   название"
                     match = re.match(r'^\s*(\d+)\s+([^\s].*)$', text)
                     if match:
                         number = match.group(1)
@@ -72,20 +67,44 @@ class SampleNameMatcher:
             return []
     
     def extract_surface_type(self, name):
-        """Извлечение типа поверхности нагрева из названия с учетом опечаток"""
-        # Сначала проверяем точные совпадения
+        """Извлечение типа поверхности нагрева из названия"""
+        # Нормализуем римские цифры
+        normalized_name = self.normalize_roman_numerals(name)
+        
         for surface_type, patterns in self.surface_types.items():
             for pattern in patterns:
-                if pattern in name:
+                normalized_pattern = self.normalize_roman_numerals(pattern)
+                if normalized_pattern in normalized_name:
                     return surface_type
         
-        # Если точных совпадений нет, ищем похожие названия
+        # Поиск похожих названий
         for surface_type, patterns in self.surface_types.items():
             for pattern in patterns:
-                if self.similar(pattern, name) > 0.7:  # 70% схожести
+                normalized_pattern = self.normalize_roman_numerals(pattern)
+                if self.similar(normalized_pattern, normalized_name) > 0.7:
                     return surface_type
         
         return None
+    
+    def normalize_roman_numerals(self, text):
+        """Нормализация римских цифр в тексте"""
+        replacements = [
+            (' НД-I', ' НД-1'),
+            (' НД-II', ' НД-2'), 
+            (' НД-I ', ' НД-1 '),
+            (' НД-II ', ' НД-2 '),
+            ('КПП НД-I', 'КПП НД-1'),
+            ('КПП НД-II', 'КПП НД-2'),
+            ('НД-I', 'НД-1'),
+            ('НД-II', 'НД-2'),
+            ('I', '1'),
+            ('II', '2')
+        ]
+        
+        result = text
+        for roman, arabic in replacements:
+            result = result.replace(roman, arabic)
+        return result
     
     def similar(self, a, b):
         """Вычисление схожести строк"""
@@ -98,22 +117,18 @@ class SampleNameMatcher:
         if matches:
             return matches[0]
         
-        # Альтернативные паттерны
         matches = re.findall(r'(\d+)[,]\s*[А-Г]\)', name)
         if matches:
             return matches[0]
         
-        # Для формата типа "ШПП (4-1,А)" - берем первое число
         matches = re.findall(r'(\d+)-\d+', name)
         if matches:
             return matches[0]
         
-        # Ищем просто число в скобках
         matches = re.findall(r'\((\d+)\)', name)
         if matches:
             return matches[0]
         
-        # Ищем любое число в названии
         matches = re.findall(r'\b(\d+)\b', name)
         if matches:
             return matches[0]
@@ -122,17 +137,14 @@ class SampleNameMatcher:
     
     def extract_letter(self, name):
         """Извлечение буквы (А, Б, В, Г) из названия"""
-        # Ищем букву в скобках в конце: (30,Г) или (А)
         matches = re.findall(r'\([^)]*([А-Г])\)', name)
         if matches:
             return matches[0]
         
-        # Ищем букву после запятой в скобках
         matches = re.findall(r',\s*([А-Г])\)', name)
         if matches:
             return matches[0]
         
-        # Ищем букву в скобках отдельно
         matches = re.findall(r'\(([А-Г])\)', name)
         if matches:
             return matches[0]
@@ -141,68 +153,45 @@ class SampleNameMatcher:
     
     def parse_protocol_sample_name(self, sample_name):
         """Парсинг названия образца из протокола химического анализа"""
-        # Определяем букву из префикса (НА, НБ, НВ, НГ) - это нитка!
-        letter_map = {'НА': 'А', 'НБ': 'Б', 'НВ': 'В', 'НГ': 'Г', 'Н-Г': 'Г'}
+        # Определяем букву нитки
         letter = None
+        letter_map = {'НА': 'А', 'НБ': 'Б', 'НВ': 'В', 'НГ': 'Г', 'Н-Г': 'Г'}
         
-        # Сначала ищем букву нитки из префикса (самый надежный способ)
+        # Поиск в любом месте строки
         for prefix, mapped_letter in letter_map.items():
-            if sample_name.startswith(prefix):
+            if prefix in sample_name:
                 letter = mapped_letter
                 break
         
-        # Если не нашли по префиксу, ищем в тексте
+        # Поиск паттернов типа "НБ", "Н Б", "Н-Б"
         if not letter:
-            for l in self.letters:
-                if f'Н{l}' in sample_name or f'Н-{l}' in sample_name:
-                    letter = l
-                    break
-        
-        # Определяем тип поверхности (с учетом римских цифр)
-        surface_type = None
-        
-        # Заменяем римские цифры на арабские для унификации
-        normalized_name = sample_name
-        for roman, arabic in self.roman_to_arabic.items():
-            normalized_name = normalized_name.replace(roman, arabic)
-        
-        for stype, patterns in self.surface_types.items():
+            patterns = [
+                r'Н[_\s\-]?([А-Г])',
+                r'Н([А-Г])[_\s]',
+                r'[_\s]Н([А-Г])',
+            ]
+            
             for pattern in patterns:
-                # Нормализуем паттерн тоже
-                normalized_pattern = pattern
-                for roman, arabic in self.roman_to_arabic.items():
-                    normalized_pattern = normalized_pattern.replace(roman, arabic)
-                
-                if normalized_pattern in normalized_name:
-                    surface_type = stype
+                matches = re.findall(pattern, sample_name)
+                if matches:
+                    letter = matches[0]
                     break
-            if surface_type:
-                break
         
-        # Если точного совпадения нет, ищем похожие
-        if not surface_type:
-            for stype, patterns in self.surface_types.items():
-                for pattern in patterns:
-                    normalized_pattern = pattern
-                    for roman, arabic in self.roman_to_arabic.items():
-                        normalized_pattern = normalized_pattern.replace(roman, arabic)
-                    
-                    if self.similar(normalized_pattern, normalized_name) > 0.7:
-                        surface_type = stype
-                        break
-                if surface_type:
-                    break
+        # Определяем тип поверхности
+        surface_type = self.extract_surface_type(sample_name)
         
         # Извлекаем номер трубы
         tube_number = None
         numbers = re.findall(r'\d+', sample_name)
         if numbers:
-            # Ищем число после "НГ" или подобных конструкций
-            pattern_match = re.search(r'Н[А-Г-]\s*(\d+)', sample_name)
-            if pattern_match:
-                tube_number = pattern_match.group(1)
-            else:
-                # Берем первое найденное число как номер трубы
+            # Ищем число после комбинации с буквой
+            if letter:
+                letter_pattern = f'Н{letter}[_\\s\\-]*№?\\s*(\\d+)'
+                pattern_match = re.search(letter_pattern, sample_name)
+                if pattern_match:
+                    tube_number = pattern_match.group(1)
+            
+            if not tube_number:
                 tube_number = numbers[0]
         
         return {
@@ -218,34 +207,28 @@ class SampleNameMatcher:
         unmatched_protocol = protocol_samples.copy()
         used_correct = set()
         
-        # Этап 1: Точное совпадение типа поверхности + номера + буквы
+        # Этап 1: 100% совпадение (поверхность + нитка + номер трубы)
         matches_stage1 = self._match_stage1(unmatched_protocol, correct_samples, used_correct)
         matched_samples.extend(matches_stage1)
         unmatched_protocol = [s for s in unmatched_protocol if s not in [m[0] for m in matches_stage1]]
         
-        # Этап 2: Совпадение типа поверхности + номера
+        # Этап 2: Совпадение поверхности + номера
         matches_stage2 = self._match_stage2(unmatched_protocol, correct_samples, used_correct)
         matched_samples.extend(matches_stage2)
         unmatched_protocol = [s for s in unmatched_protocol if s not in [m[0] for m in matches_stage2]]
         
-        # Этап 3: Совпадение типа поверхности + буквы
+        # Этап 3: Совпадение поверхности + буквы
         matches_stage3 = self._match_stage3(unmatched_protocol, correct_samples, used_correct)
         matched_samples.extend(matches_stage3)
         unmatched_protocol = [s for s in unmatched_protocol if s not in [m[0] for m in matches_stage3]]
         
-        # Этап 4: Частичное совпадение типа поверхности
-        matches_stage4 = self._match_stage4(unmatched_protocol, correct_samples, used_correct)
-        matched_samples.extend(matches_stage4)
-        unmatched_protocol = [s for s in unmatched_protocol if s not in [m[0] for m in matches_stage4]]
-        
         return matched_samples, unmatched_protocol
     
     def _match_stage1(self, protocol_samples, correct_samples, used_correct):
-        """Этап 1: Точное совпадение типа поверхности + номера + буквы"""
+        """Этап 1: 100% совпадение типа поверхности + номера + буквы"""
         matches = []
         for protocol in protocol_samples:
             protocol_info = self.parse_protocol_sample_name(protocol['name'])
-            best_match = None
             
             for correct in correct_samples:
                 if correct['original'] in used_correct:
@@ -254,12 +237,9 @@ class SampleNameMatcher:
                 if (protocol_info['surface_type'] == correct['surface_type'] and
                     protocol_info['tube_number'] == correct['tube_number'] and
                     protocol_info['letter'] == correct['letter']):
-                    best_match = correct
+                    matches.append((protocol, correct, "100% совпадение"))
+                    used_correct.add(correct['original'])
                     break
-            
-            if best_match:
-                matches.append((protocol, best_match, "Этап 1: полное совпадение"))
-                used_correct.add(best_match['original'])
         
         return matches
     
@@ -268,7 +248,6 @@ class SampleNameMatcher:
         matches = []
         for protocol in protocol_samples:
             protocol_info = self.parse_protocol_sample_name(protocol['name'])
-            best_match = None
             
             for correct in correct_samples:
                 if correct['original'] in used_correct:
@@ -276,12 +255,9 @@ class SampleNameMatcher:
                 
                 if (protocol_info['surface_type'] == correct['surface_type'] and
                     protocol_info['tube_number'] == correct['tube_number']):
-                    best_match = correct
+                    matches.append((protocol, correct, "совпадение тип+номер"))
+                    used_correct.add(correct['original'])
                     break
-            
-            if best_match:
-                matches.append((protocol, best_match, "Этап 2: тип+номер"))
-                used_correct.add(best_match['original'])
         
         return matches
     
@@ -290,7 +266,6 @@ class SampleNameMatcher:
         matches = []
         for protocol in protocol_samples:
             protocol_info = self.parse_protocol_sample_name(protocol['name'])
-            best_match = None
             
             for correct in correct_samples:
                 if correct['original'] in used_correct:
@@ -298,37 +273,9 @@ class SampleNameMatcher:
                 
                 if (protocol_info['surface_type'] == correct['surface_type'] and
                     protocol_info['letter'] == correct['letter']):
-                    best_match = correct
+                    matches.append((protocol, correct, "совпадение тип+буква"))
+                    used_correct.add(correct['original'])
                     break
-            
-            if best_match:
-                matches.append((protocol, best_match, "Этап 3: тип+буква"))
-                used_correct.add(best_match['original'])
-        
-        return matches
-    
-    def _match_stage4(self, protocol_samples, correct_samples, used_correct):
-        """Этап 4: Частичное совпадение типа поверхности"""
-        matches = []
-        for protocol in protocol_samples:
-            protocol_info = self.parse_protocol_sample_name(protocol['name'])
-            best_match = None
-            best_similarity = 0
-            
-            for correct in correct_samples:
-                if correct['original'] in used_correct:
-                    continue
-                
-                # Проверяем схожесть названий поверхностей
-                if protocol_info['surface_type'] and correct['surface_type']:
-                    similarity = self.similar(protocol_info['surface_type'], correct['surface_type'])
-                    if similarity > 0.7 and similarity > best_similarity:
-                        best_similarity = similarity
-                        best_match = correct
-            
-            if best_match:
-                matches.append((protocol, best_match, f"Этап 4: похожий тип ({best_similarity:.2f})"))
-                used_correct.add(best_match['original'])
         
         return matches
 
@@ -341,70 +288,36 @@ class ChemicalAnalyzer:
         """Загрузка стандартов из предустановленных файлов"""
         self.standards = {
             "12Х1МФ": {
-                "C": (0.10, 0.15),
-                "Si": (0.17, 0.37),
-                "Mn": (0.40, 0.70),
-                "Cr": (0.90, 1.20),
-                "Mo": (0.25, 0.35),
-                "V": (0.15, 0.30),
-                "Ni": (None, 0.25),
-                "Cu": (None, 0.20),
-                "S": (None, 0.025),
-                "P": (None, 0.025),
-                "source": "ТУ 14-3Р-55-2001"
+                "C": (0.10, 0.15), "Si": (0.17, 0.37), "Mn": (0.40, 0.70),
+                "Cr": (0.90, 1.20), "Mo": (0.25, 0.35), "V": (0.15, 0.30),
+                "Ni": (None, 0.25), "Cu": (None, 0.20), "S": (None, 0.025),
+                "P": (None, 0.025), "source": "ТУ 14-3Р-55-2001"
             },
             "12Х18Н12Т": {
-                "C": (None, 0.12),
-                "Si": (None, 0.80),
-                "Mn": (1.00, 2.00),
-                "Cr": (17.00, 19.00),
-                "Ni": (11.00, 13.00),
-                "Ti": (None, 0.70),
-                "Cu": (None, 0.30),
-                "S": (None, 0.020),
-                "P": (None, 0.035),
+                "C": (None, 0.12), "Si": (None, 0.80), "Mn": (1.00, 2.00),
+                "Cr": (17.00, 19.00), "Ni": (11.00, 13.00), "Ti": (None, 0.70),
+                "Cu": (None, 0.30), "S": (None, 0.020), "P": (None, 0.035),
                 "source": "ТУ 14-3Р-55-2001"
             },
             "сталь 20": {
-                "C": (0.17, 0.24),
-                "Si": (0.17, 0.37),
-                "Mn": (0.35, 0.65),
-                "Cr": (None, 0.25),
-                "Ni": (None, 0.25),
-                "Cu": (None, 0.30),
-                "P": (None, 0.030),
-                "S": (None, 0.025),
-                "source": "ТУ 14-3Р-55-2001"
+                "C": (0.17, 0.24), "Si": (0.17, 0.37), "Mn": (0.35, 0.65),
+                "Cr": (None, 0.25), "Ni": (None, 0.25), "Cu": (None, 0.30),
+                "P": (None, 0.030), "S": (None, 0.025), "source": "ТУ 14-3Р-55-2001"
             },
             "Ди82": {
-                "C": (0.08, 0.12),
-                "Si": (None, 0.5),
-                "Mn": (0.30, 0.60),
-                "Cr": (8.60, 10.00),
-                "Ni": (None, 0.70),
-                "Mo": (0.60, 0.80),
-                "V": (0.10, 0.20),
-                "Nb": (0.10, 0.20),
-                "Cu": (None, 0.30),
-                "S": (None, 0.015),
-                "P": (None, 0.03),
-                "source": "ТУ 14-3Р-55-2001"
+                "C": (0.08, 0.12), "Si": (None, 0.5), "Mn": (0.30, 0.60),
+                "Cr": (8.60, 10.00), "Ni": (None, 0.70), "Mo": (0.60, 0.80),
+                "V": (0.10, 0.20), "Nb": (0.10, 0.20), "Cu": (None, 0.30),
+                "S": (None, 0.015), "P": (None, 0.03), "source": "ТУ 14-3Р-55-2001"
             },
             "Ди59": {
-                "C": (0.06, 0.10),
-                "Si": (1.8, 2.2),
-                "Mn": (12.00, 13.50),
-                "Cr": (11.50, 13.00),
-                "Ni": (1.8, 2.5),
-                "Nb": (0.60, 1.00),
-                "Cu": (2.00, 2.50),
-                "S": (None, 0.02),
-                "P": (None, 0.03),
+                "C": (0.06, 0.10), "Si": (1.8, 2.2), "Mn": (12.00, 13.50),
+                "Cr": (11.50, 13.00), "Ni": (1.8, 2.5), "Nb": (0.60, 1.00),
+                "Cu": (2.00, 2.50), "S": (None, 0.02), "P": (None, 0.03),
                 "source": "ТУ 14-3Р-55-2001"
             }
         }
         
-        # Загрузка пользовательских стандартов если есть
         if os.path.exists("user_standards.json"):
             with open("user_standards.json", "r", encoding="utf-8") as f:
                 user_std = json.load(f)
@@ -413,7 +326,6 @@ class ChemicalAnalyzer:
     def save_user_standards(self):
         """Сохранение пользовательских стандартов"""
         with open("user_standards.json", "w", encoding="utf-8") as f:
-            # Сохраняем только пользовательские стандарты (не предустановленные)
             predefined = ["12Х1МФ", "12Х18Н12Т", "сталь 20", "Ди82", "Ди59"]
             user_standards = {k: v for k, v in self.standards.items() if k not in predefined}
             json.dump(user_standards, f, ensure_ascii=False, indent=2)
@@ -428,7 +340,6 @@ class ChemicalAnalyzer:
             for paragraph in doc.paragraphs:
                 text = paragraph.text.strip()
                 
-                # Поиск названия образца
                 if "Наименование образца:" in text:
                     sample_name = text.split("Наименование образца:")[1].strip()
                     current_sample = {
@@ -438,18 +349,13 @@ class ChemicalAnalyzer:
                     }
                     samples.append(current_sample)
                 
-                # Поиск марки стали - улучшенная версия
                 elif "Химический состав металла образца соответствует марке стали:" in text:
                     if current_sample:
-                        # Извлечение марки стали (убираем лишние символы и комментарии)
                         grade_text = text.split("марке стали:")[1].strip()
-                        # Удаляем возможные ** вокруг марки стали и все что после запятой
                         grade_text = re.sub(r'\*+', '', grade_text).strip()
-                        # Берем только первую часть до запятой (основную марку стали)
                         grade_text = grade_text.split(',')[0].strip()
                         current_sample["steel_grade"] = grade_text
             
-            # Парсинг таблиц с химическим составом
             for i, table in enumerate(doc.tables):
                 if i < len(samples):
                     composition = self.parse_composition_table(table)
@@ -462,41 +368,32 @@ class ChemicalAnalyzer:
             return []
     
     def parse_composition_table(self, table):
-        """Парсинг таблицы с химическим составом - по фиксированным строкам"""
+        """Парсинг таблицы с химическим составом"""
         composition = {}
         
         try:
-            # Преобразуем таблицу в список строк
             table_data = []
             for row in table.rows:
                 row_data = [cell.text.strip() for cell in row.cells]
                 table_data.append(row_data)
             
-            # Проверяем, что таблица имеет достаточно строк
             if len(table_data) < 13:
                 st.warning(f"Таблица имеет только {len(table_data)} строк, ожидалось минимум 13")
                 return composition
             
-            # Строка 0: заголовки первой группы элементов
             headers_row1 = table_data[0]
-            # Строка 5: средние значения первой группы
             values_row1 = table_data[5]
             
-            # Строка 7: заголовки второй группы элементов  
             headers_row2 = table_data[7]
-            # Строка 12: средние значения второй группы
             values_row2 = table_data[12]
             
-            # Все возможные элементы для поиска
             all_elements = ["C", "Si", "Mn", "P", "S", "Cr", "Mo", "Ni", 
                            "Cu", "Al", "Co", "Nb", "Ti", "V", "W", "Fe"]
             
-            # Обрабатываем первую группу элементов
             for i, header in enumerate(headers_row1):
                 if header in all_elements and i < len(values_row1):
                     value_str = values_row1[i]
                     try:
-                        # Очищаем и преобразуем значение
                         value_str = value_str.replace(',', '.').replace(' ', '')
                         if '±' in value_str:
                             value_str = value_str.split('±')[0]
@@ -505,12 +402,10 @@ class ChemicalAnalyzer:
                     except (ValueError, IndexError):
                         continue
             
-            # Обрабатываем вторую группу элементов
             for i, header in enumerate(headers_row2):
                 if header in all_elements and i < len(values_row2):
                     value_str = values_row2[i]
                     try:
-                        # Очищаем и преобразуем значение
                         value_str = value_str.replace(',', '.').replace(' ', '')
                         if '±' in value_str:
                             value_str = value_str.split('±')[0]
@@ -574,7 +469,6 @@ class ChemicalAnalyzer:
                         'Труба': protocol_info['tube_number'] or 'н/д',
                         'Нитка': protocol_info['letter'] or 'н/д'
                     })
-                # Сортируем по номеру
                 match_data.sort(key=lambda x: x['Номер'])
                 st.table(pd.DataFrame(match_data))
         
@@ -594,7 +488,7 @@ class ChemicalAnalyzer:
                     })
                 st.table(pd.DataFrame(unmatched_data))
         
-        # Сортируем сопоставленные образцы по номеру, несопоставленные оставляем в конце
+        # Сортируем сопоставленные образцы по номеру
         matched_samples.sort(key=lambda x: x['correct_number'])
         return matched_samples + unmatched_samples, correct_samples
     
@@ -605,7 +499,6 @@ class ChemicalAnalyzer:
         
         min_val, max_val = standard[element]
         
-        # Проверка на отклонение
         if min_val is not None and value < min_val:
             return "deviation"
         elif max_val is not None and value > max_val:
@@ -618,9 +511,7 @@ class ChemicalAnalyzer:
         if not samples:
             return None
         
-        # Собираем все уникальные марки стали
         steel_grades = list(set(sample["steel_grade"] for sample in samples if sample["steel_grade"]))
-        
         tables = {}
         
         for grade in steel_grades:
@@ -631,27 +522,22 @@ class ChemicalAnalyzer:
                 continue
                 
             standard = self.standards[grade]
-            # Только нормируемые элементы (исключаем 'source')
             norm_elements = [elem for elem in standard.keys() if elem != "source"]
             
-            # Для стали 12Х1МФ устанавливаем особый порядок столбцов
             if grade == "12Х1МФ":
                 main_elements = ["C", "Si", "Mn", "Cr", "Mo", "V", "Ni"]
                 harmful_elements = ["Cu", "S", "P"]
                 other_elements = [elem for elem in norm_elements if elem not in main_elements + harmful_elements]
                 norm_elements = main_elements + other_elements + harmful_elements
             
-            # Сортируем образцы
             grade_samples_sorted = sorted(
                 grade_samples,
                 key=lambda x: (x.get('correct_number') is None, x.get('correct_number', float('inf')))
             )
             
-            # Создаем DataFrame
             data = []
             compliance_data = []
             
-            # Добавляем образцы с последовательной нумерацией
             for idx, sample in enumerate(grade_samples_sorted, 1):
                 display_number = idx
                 
@@ -678,7 +564,6 @@ class ChemicalAnalyzer:
                 data.append(row)
                 compliance_data.append(compliance_row)
             
-            # Добавляем строку с нормативами
             requirements_row = {"№": "", "Образец": f"Требования ТУ 14-3Р-55-2001 для стали марки {grade}"}
             requirements_compliance = {"№": "requirements", "Образец": "requirements"}
             
@@ -715,44 +600,51 @@ class ChemicalAnalyzer:
         
         return tables
 
-# Остальные функции (add_manual_matching_interface, apply_styling, set_font_times_new_roman, main, create_word_report) 
-# остаются без изменений, как в предыдущем коде
-
 def add_manual_matching_interface(samples, correct_samples, analyzer):
-    """Интерфейс для ручного сопоставления образцов с подсветкой проблем"""
+    """Интерфейс для ручного сопоставления образцов с подсветкой конфликтов"""
     st.header("🔧 Ручное сопоставление образцов")
     
     editable_samples = samples.copy()
     correct_names_dict = {cs['original']: cs for cs in correct_samples}
     correct_names_list = [cs['original'] for cs in correct_samples]
     
-    # Анализируем потенциальные конфликты
-    conflict_candidates = {}
-    for correct in correct_samples:
-        potential_matches = []
+    # Создаем словарь для отслеживания использованных правильных названий
+    used_correct_names = {}
+    for sample in editable_samples:
+        if sample.get('automatically_matched') and sample['name'] in correct_names_list:
+            used_correct_names[sample['name']] = sample['original_name']
+    
+    # Находим конфликты - образцы, которые претендуют на одно правильное название
+    conflict_samples = {}
+    for correct_name in correct_names_list:
+        claimants = []
         for sample in editable_samples:
-            protocol_info = analyzer.name_matcher.parse_protocol_sample_name(sample['name'])
-            if (protocol_info['surface_type'] == correct['surface_type'] and
-                protocol_info['tube_number'] == correct['tube_number']):
-                potential_matches.append(sample)
-        
-        if len(potential_matches) > 1:
-            conflict_candidates[correct['original']] = potential_matches
+            if sample.get('name') == correct_name:
+                claimants.append(sample)
+        if len(claimants) > 1:
+            conflict_samples[correct_name] = claimants
     
     options = ["Не сопоставлен"] + correct_names_list
     manual_matches = {}
     
     st.write("**Сопоставьте образцы вручную:**")
+    st.warning("🔴 Красная подсветка - конфликт: несколько образцов претендуют на одно название")
     
     for i, sample in enumerate(editable_samples):
         col1, col2 = st.columns([2, 3])
         
         with col1:
-            # Подсвечиваем проблемные образцы
-            is_conflict = any(sample in matches for matches in conflict_candidates.values())
-            conflict_color = "🔴" if is_conflict else "⚪"
+            # Проверяем конфликты
+            is_conflict = False
+            for correct_name, claimants in conflict_samples.items():
+                if sample in claimants:
+                    is_conflict = True
+                    break
             
-            st.write(f"{conflict_color} **{sample.get('original_name', sample['name'])}**")
+            conflict_style = "background-color: #ffcccc; padding: 10px; border-radius: 5px;" if is_conflict else ""
+            
+            st.markdown(f"<div style='{conflict_style}'>", unsafe_allow_html=True)
+            st.write(f"**{sample.get('original_name', sample['name'])}**")
             if sample.get('steel_grade'):
                 st.write(f"*Марка: {sample['steel_grade']}*")
             
@@ -762,7 +654,11 @@ def add_manual_matching_interface(samples, correct_samples, analyzer):
             st.write(f"*Нитка: {protocol_info['letter'] or 'н/д'}*")
             
             if is_conflict:
-                st.warning("⚠️ Возможный конфликт сопоставления")
+                st.error("⚡ КОНФЛИКТ: Несколько образцов претендуют на это название")
+            elif sample.get('automatically_matched'):
+                st.success("✅ Автоматически сопоставлен")
+            
+            st.markdown("</div>", unsafe_allow_html=True)
         
         with col2:
             current_match = sample['name'] if sample['name'] in correct_names_list else "Не сопоставлен"
@@ -779,11 +675,26 @@ def add_manual_matching_interface(samples, correct_samples, analyzer):
     
     if st.button("✅ Применить ручное сопоставление"):
         updated_samples = []
+        reassigned_samples = []
         
+        # Сначала собираем все изменения
+        changes = {}
+        for sample_name, correct_name in manual_matches.items():
+            changes[sample_name] = correct_name
+        
+        # Применяем изменения
         for sample in editable_samples:
-            if sample['name'] in manual_matches:
-                correct_name = manual_matches[sample['name']]
+            if sample['name'] in changes:
+                correct_name = changes[sample['name']]
                 correct_sample = correct_names_dict[correct_name]
+                
+                # Проверяем, не было ли это название уже назначено автоматически другому образцу
+                if correct_name in used_correct_names and used_correct_names[correct_name] != sample['name']:
+                    reassigned_samples.append({
+                        'from': used_correct_names[correct_name],
+                        'to': sample['name'],
+                        'correct_name': correct_name
+                    })
                 
                 updated_sample = sample.copy()
                 updated_sample['original_name'] = sample['name']
@@ -796,10 +707,19 @@ def add_manual_matching_interface(samples, correct_samples, analyzer):
                 sample['manually_matched'] = False
                 updated_samples.append(sample)
         
+        # Показываем информацию о переназначениях
+        if reassigned_samples:
+            st.warning("⚠️ Были переназначены названия:")
+            for reassign in reassigned_samples:
+                st.write(f"- '{reassign['correct_name']}' перенесено с '{reassign['from']}' на '{reassign['to']}'")
+        
         st.success(f"Ручное сопоставление применено! Обновлено {len(manual_matches)} образцов.")
         return updated_samples
     
     return editable_samples
+
+# Остальные функции (apply_styling, set_font_times_new_roman, main, create_word_report) 
+# остаются без изменений
 
 def apply_styling(df, compliance_data):
     """Применяет стили к DataFrame на основе данных о соответствии"""
