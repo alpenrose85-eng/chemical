@@ -93,25 +93,51 @@ class SampleNameMatcher:
         matches = re.findall(r'(\d+)-\d+', name)
         if matches:
             return matches[0]
+        
+        # Ищем просто число в скобках
+        matches = re.findall(r'\((\d+)\)', name)
+        if matches:
+            return matches[0]
             
         return None
     
     def extract_letter(self, name):
         """Извлечение буквы (А, Б, В, Г) из названия"""
-        for letter in self.letters:
-            if f',{letter}' in name or f', {letter}' in name or f'({letter})' in name or f',{letter})' in name:
-                return letter
+        # Ищем букву в скобках в конце: (30,Г) или (А)
+        matches = re.findall(r'\([^)]*([А-Г])\)', name)
+        if matches:
+            return matches[0]
+        
+        # Ищем букву после запятой в скобках
+        matches = re.findall(r',\s*([А-Г])\)', name)
+        if matches:
+            return matches[0]
+        
+        # Ищем букву в скобках отдельно
+        matches = re.findall(r'\(([А-Г])\)', name)
+        if matches:
+            return matches[0]
+            
         return None
     
     def parse_protocol_sample_name(self, sample_name):
         """Парсинг названия образца из протокола химического анализа"""
-        # Определяем букву из префикса (НА, НБ, НВ, НГ)
+        # Определяем букву из префикса (НА, НБ, НВ, НГ) - это нитка!
         letter_map = {'НА': 'А', 'НБ': 'Б', 'НВ': 'В', 'НГ': 'Г', 'Н-Г': 'Г'}
         letter = None
+        
+        # Сначала ищем букву нитки из префикса (самый надежный способ)
         for prefix, mapped_letter in letter_map.items():
             if sample_name.startswith(prefix):
                 letter = mapped_letter
                 break
+        
+        # Если не нашли по префиксу, ищем в тексте
+        if not letter:
+            for l in self.letters:
+                if f'Н{l}' in sample_name or f'Н-{l}' in sample_name:
+                    letter = l
+                    break
         
         # Определяем тип поверхности
         surface_type = None
@@ -125,16 +151,17 @@ class SampleNameMatcher:
         
         # Извлекаем номер трубы
         tube_number = None
-        # Ищем числа в названии
+        # Ищем числа в названии после подчеркивания или других разделителей
         numbers = re.findall(r'\d+', sample_name)
         if numbers:
-            # Для ПС КШ берем первое число как номер трубы
+            # Для разных типов поверхностей разные стратегии
             if surface_type == 'ПС КШ':
+                # Для ПС КШ берем первое число как номер трубы
                 tube_number = numbers[0]
-            # Для других типов пытаемся найти номер после типа
             else:
-                # Ищем паттерн "тип (число"
-                pattern_match = re.search(r'(\d+)[_ ]', sample_name)
+                # Для других типов ищем число после подчеркивания или в специфичных позициях
+                # Паттерн: ЭБ№3Б_НГ 30_КПП НД-I - берем число после "НГ"
+                pattern_match = re.search(r'Н[А-Г-]\s*(\d+)', sample_name)
                 if pattern_match:
                     tube_number = pattern_match.group(1)
                 else:
@@ -171,11 +198,6 @@ class SampleNameMatcher:
             correct_sample['surface_type'] and 
             protocol_sample['surface_type'] == correct_sample['surface_type']):
             score += 2
-        # Частичное совпадение типа (1 балл) - если один из типов None, но есть другие признаки
-        elif (protocol_sample['surface_type'] is None or 
-              correct_sample['surface_type'] is None):
-            # Если тип не определен с одной стороны, но есть сильные другие признаки
-            score += 0  # не даем баллов за неопределенность
         
         # Совпадение номера трубы (2 балла)
         if (protocol_sample['tube_number'] and 
@@ -183,19 +205,26 @@ class SampleNameMatcher:
             protocol_sample['tube_number'] == correct_sample['tube_number']):
             score += 2
         
-        # Совпадение буквы (1 балл)
+        # Совпадение буквы нитки (2 балла) - ВАЖНО!
         if (protocol_sample['letter'] and 
             correct_sample['letter'] and 
             protocol_sample['letter'] == correct_sample['letter']):
-            score += 1
+            score += 2
         
-        # ДОПОЛНИТЕЛЬНО: если номер трубы и буква совпадают, но тип поверхности разный,
-        # даем шанс на сопоставление (особенно для ПС КШ / труба_ПТКМ)
+        # Дополнительные баллы за комбинации
+        # Если совпали номер трубы и буква - очень сильное совпадение
         if (protocol_sample['tube_number'] and correct_sample['tube_number'] and
             protocol_sample['letter'] and correct_sample['letter'] and
             protocol_sample['tube_number'] == correct_sample['tube_number'] and
             protocol_sample['letter'] == correct_sample['letter']):
-            score += 1  # дополнительный балл за полное совпадение номера и буквы
+            score += 3
+        
+        # Если совпали тип поверхности и буква
+        if (protocol_sample['surface_type'] and correct_sample['surface_type'] and
+            protocol_sample['letter'] and correct_sample['letter'] and
+            protocol_sample['surface_type'] == correct_sample['surface_type'] and
+            protocol_sample['letter'] == correct_sample['letter']):
+            score += 2
         
         return score
 
@@ -417,6 +446,14 @@ class ChemicalAnalyzer:
                 corrected_sample['name'] = best_match['original']   # Заменяем на правильное
                 corrected_sample['correct_number'] = best_match['number']  # Сохраняем номер для сортировки
                 corrected_sample['automatically_matched'] = True
+                
+                # Добавляем информацию для отладки
+                corrected_sample['match_info'] = {
+                    'surface_type': protocol_sample_info['surface_type'],
+                    'tube_number': protocol_sample_info['tube_number'], 
+                    'letter': protocol_sample_info['letter']
+                }
+                
                 matched_samples.append(corrected_sample)
             else:
                 # Если совпадение не найдено, оставляем оригинальное название
@@ -429,13 +466,17 @@ class ChemicalAnalyzer:
         if matched_samples:
             st.success(f"Успешно сопоставлено {len(matched_samples)} образцов")
             
-            with st.expander("📋 Просмотр сопоставленных образцов"):
+            with st.expander("📋 Детали автоматического сопоставления"):
                 match_data = []
                 for sample in matched_samples:
+                    match_info = sample.get('match_info', {})
                     match_data.append({
                         'Номер': sample['correct_number'],
                         'Исходное название': sample['original_name'],
-                        'Правильное название': sample['name']
+                        'Правильное название': sample['name'],
+                        'Тип': match_info.get('surface_type', 'н/д'),
+                        'Труба': match_info.get('tube_number', 'н/д'),
+                        'Нитка': match_info.get('letter', 'н/д')
                     })
                 # Сортируем по номеру
                 match_data.sort(key=lambda x: x['Номер'])
@@ -447,9 +488,13 @@ class ChemicalAnalyzer:
             with st.expander("⚠️ Просмотр несопоставленных образцов"):
                 unmatched_data = []
                 for sample in unmatched_samples:
+                    protocol_info = self.name_matcher.parse_protocol_sample_name(sample['name'])
                     unmatched_data.append({
                         'Образец': sample['original_name'],
-                        'Марка стали': sample['steel_grade']
+                        'Марка стали': sample['steel_grade'],
+                        'Тип': protocol_info['surface_type'] or 'н/д',
+                        'Труба': protocol_info['tube_number'] or 'н/д',
+                        'Нитка': protocol_info['letter'] or 'н/д'
                     })
                 st.table(pd.DataFrame(unmatched_data))
         
@@ -579,6 +624,9 @@ class ChemicalAnalyzer:
         
         return tables
 
+# Остальные функции (add_manual_matching_interface, apply_styling, set_font_times_new_roman, main, create_word_report) 
+# остаются без изменений, как в предыдущем коде
+
 def add_manual_matching_interface(samples, correct_samples, analyzer):
     """Интерфейс для ручного сопоставления образцов"""
     st.header("🔧 Ручное сопоставление образцов")
@@ -604,6 +652,12 @@ def add_manual_matching_interface(samples, correct_samples, analyzer):
             st.write(f"**{sample.get('original_name', sample['name'])}**")
             if sample.get('steel_grade'):
                 st.write(f"*Марка: {sample['steel_grade']}*")
+            
+            # Показываем дополнительную информацию для ручного сопоставления
+            protocol_info = analyzer.name_matcher.parse_protocol_sample_name(sample['name'])
+            st.write(f"*Тип: {protocol_info['surface_type'] or 'н/д'}*")
+            st.write(f"*Труба: {protocol_info['tube_number'] or 'н/д'}*")
+            st.write(f"*Нитка: {protocol_info['letter'] or 'н/д'}*")
         
         with col2:
             # Определяем текущее сопоставление
@@ -838,7 +892,7 @@ def main():
                         'Название': sample['original'],
                         'Тип': sample['surface_type'] or 'н/д',
                         'Труба': sample['tube_number'] or 'н/д', 
-                        'Буква': sample['letter'] or 'н/д'
+                        'Нитка': sample['letter'] or 'н/д'
                     })
                 st.table(pd.DataFrame(preview_data))
     
