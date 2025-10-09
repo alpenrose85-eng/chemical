@@ -502,10 +502,10 @@ class ChemicalAnalyzer:
                 other_elements = [elem for elem in norm_elements if elem not in main_elements + harmful_elements]
                 norm_elements = main_elements + other_elements + harmful_elements
             
-            # Сортируем образцы по correct_number (если есть)
+            # ИСПРАВЛЕННАЯ СОРТИРОВКА: сначала образцы с номерами (в порядке номеров), затем без номеров
             grade_samples_sorted = sorted(
-                grade_samples, 
-                key=lambda x: x.get('correct_number', float('inf'))
+                grade_samples,
+                key=lambda x: (x.get('correct_number') is None, x.get('correct_number', float('inf')))
             )
             
             # Создаем DataFrame с колонкой исходных названий
@@ -515,7 +515,7 @@ class ChemicalAnalyzer:
             # Добавляем образцы
             for idx, sample in enumerate(grade_samples_sorted):
                 # Используем correct_number для отображения, если есть
-                display_number = sample.get('correct_number', idx + 1)
+                display_number = sample.get('correct_number', 'н/д')
                 
                 # Добавляем колонку с исходным названием
                 original_name = sample.get('original_name', '')
@@ -821,165 +821,4 @@ def main():
     
     # Загрузка файла с правильными названиями
     st.subheader("1. Загрузите файл с правильными названиями образцов")
-    correct_names_file = st.file_uploader(
-        "Файл с правильными названиями (.docx)",
-        type=["docx"],
-        key="correct_names"
-    )
-    
-    correct_samples = []
-    if correct_names_file:
-        # Показываем preview правильных названий
-        correct_samples = analyzer.name_matcher.parse_correct_names(correct_names_file.getvalue())
-        if correct_samples:
-            st.success(f"Загружено {len(correct_samples)} правильных названий образцов")
-            with st.expander("📋 Просмотр загруженных названий"):
-                preview_data = []
-                for sample in correct_samples:
-                    preview_data.append({
-                        'Номер': sample['number'],
-                        'Название': sample['original'],
-                        'Тип': sample['surface_type'] or 'н/д',
-                        'Труба': sample['tube_number'] or 'н/д', 
-                        'Буква': sample['letter'] or 'н/д'
-                    })
-                st.table(pd.DataFrame(preview_data))
-    
-    # Загрузка файлов протоколов
-    st.subheader("2. Загрузите файлы протоколов химического анализа")
-    uploaded_files = st.file_uploader(
-        "Файлы протоколов (.docx)", 
-        type=["docx"], 
-        accept_multiple_files=True,
-        key="protocol_files"
-    )
-    
-    all_samples = []
-    
-    if uploaded_files:
-        # Парсим все образцы из загруженных файлов
-        for uploaded_file in uploaded_files:
-            samples = analyzer.parse_protocol_file(uploaded_file.getvalue())
-            all_samples.extend(samples)
-        
-        # Сопоставляем названия, если загружен файл с правильными названиями
-        if correct_names_file and correct_samples:
-            st.subheader("🔍 Автоматическое сопоставление названий образцов")
-            all_samples, correct_samples_loaded = analyzer.match_sample_names(all_samples, correct_names_file)
-            
-            # Показываем интерфейс ручного сопоставления
-            all_samples = add_manual_matching_interface(all_samples, correct_samples_loaded, analyzer)
-        
-        # Анализ и отображение результатов
-        if all_samples:
-            st.header("Результаты анализа")
-            
-            # Легенда цветов
-            st.markdown("""
-            **Легенда:**
-            - <span style='background-color: #ffcccc; padding: 2px 5px; border-radius: 3px;'>🔴 Красный</span> - отклонение от норм
-            - <span style='background-color: #f0f0f0; padding: 2px 5px; border-radius: 3px;'>⚪ Серый</span> - нормативные требования
-            """, unsafe_allow_html=True)
-            
-            # Создание таблиц для отчета
-            report_tables = analyzer.create_report_table_with_original_names(all_samples)
-            
-            # Подготовка данных для экспорта
-            export_tables = {}
-            
-            for grade, table_data in report_tables.items():
-                st.subheader(f"Марка стали: {grade}")
-                
-                # Применяем стили к таблице
-                styled_table = apply_styling(table_data["data"], table_data["compliance"])
-                st.dataframe(styled_table, use_container_width=True, hide_index=True)
-                
-                # Сохраняем для экспорта
-                export_tables[grade] = table_data["data"]
-            
-            # Экспорт в Word
-            if st.button("📄 Экспорт в Word"):
-                create_word_report(export_tables, all_samples, analyzer)
-                st.success("Отчет готов к скачиванию!")
-            
-            # Раздел с обработанными образцами (в самом конце)
-            st.header("Обработанные образцы")
-            for sample in all_samples:
-                with st.expander(f"📋 {sample['name']} - {sample['steel_grade']}"):
-                    if 'original_name' in sample:
-                        st.write(f"**Исходное название:** {sample['original_name']}")
-                    if 'correct_number' in sample:
-                        st.write(f"**Номер в списке:** {sample['correct_number']}")
-                    st.write(f"**Марка стали:** {sample['steel_grade']}")
-                    st.write("**Химический состав:**")
-                    for element, value in sample['composition'].items():
-                        st.write(f"- {element}: {value}")
-
-def create_word_report(tables, samples, analyzer):
-    """Создание Word отчета"""
-    try:
-        doc = Document()
-        
-        # Устанавливаем шрифт Times New Roman для всего документа
-        set_font_times_new_roman(doc)
-        
-        # Титульная страница
-        title = doc.add_heading('Протокол анализа химического состава', 0)
-        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        
-        doc.add_paragraph(f"Дата формирования: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
-        doc.add_paragraph(f"Проанализировано образцов: {len(samples)}")
-        doc.add_paragraph("")
-        
-        # Легенда
-        doc.add_heading('Легенда', level=1)
-        legend_table = doc.add_table(rows=3, cols=2)
-        legend_table.style = 'Table Grid'
-        
-        legend_table.cell(0, 0).text = "Цвет"
-        legend_table.cell(0, 1).text = "Значение"
-        
-        legend_table.cell(1, 0).text = "🔴"
-        legend_table.cell(1, 1).text = "Отклонение от норм"
-        
-        legend_table.cell(2, 0).text = "⚪"
-        legend_table.cell(2, 1).text = "Нормативные требования"
-        
-        doc.add_paragraph()
-        
-        # Добавляем таблицы для каждой марки стали
-        for grade, table_df in tables.items():
-            doc.add_heading(f'Марка стали: {grade}', level=1)
-            
-            # Создаем таблицу в Word
-            word_table = doc.add_table(rows=len(table_df)+1, cols=len(table_df.columns))
-            word_table.style = 'Table Grid'
-            
-            # Заголовки
-            for j, col in enumerate(table_df.columns):
-                word_table.cell(0, j).text = str(col)
-            
-            # Данные
-            for i, row in table_df.iterrows():
-                for j, col in enumerate(table_df.columns):
-                    word_table.cell(i+1, j).text = str(row[col])
-            
-            doc.add_paragraph()
-        
-        # Сохраняем документ
-        doc.save("химический_анализ_отчет.docx")
-        
-        # Предоставляем ссылку для скачивания
-        with open("химический_анализ_отчет.docx", "rb") as file:
-            btn = st.download_button(
-                label="📥 Скачать отчет",
-                data=file,
-                file_name="химический_анализ_отчет.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            )
-            
-    except Exception as e:
-        st.error(f"Ошибка при создании Word отчета: {str(e)}")
-
-if __name__ == "__main__":
-    main()
+    correct
