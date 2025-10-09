@@ -1,114 +1,82 @@
 import streamlit as st
 import pandas as pd
 import re
-from docx import Document
-import io
 
-def extract_sample_data(doc_text):
-    """Извлекает данные о образцах и химическом составе из текста документа"""
+def parse_protocol_text(text):
+    """Парсит протокол из текстового представления"""
     
-    # Регулярные выражения для извлечения данных
-    sample_name_pattern = r'\[Наименование образца:\]\{\.underline\} (.+)'
-    steel_grade_pattern = r'\[Химический состав металла образца (?:соответствует|близок) марке стали:\]\{\.underline\} (.+)'
+    samples = []
+    current_sample = {}
     
-    # Разделяем текст на секции по образцам
-    samples_sections = re.split(r'\[Наименование образца:\]\{\.underline\}', doc_text)
+    lines = text.split('\n')
+    i = 0
     
-    samples_data = []
+    while i < len(lines):
+        line = lines[i].strip()
+        
+        # Начало нового образца
+        if 'Наименование образца:' in line:
+            if current_sample:
+                samples.append(current_sample)
+            current_sample = {'Наименование образца': line.split('Наименование образца:')[-1].strip()}
+        
+        # Марка стали
+        elif 'Химический состав металла образца' in line and 'марке стали:' in line:
+            steel_grade = line.split('марке стали:')[-1].strip()
+            current_sample['Марка стали'] = steel_grade
+        
+        # Таблица с химическим составом
+        elif 'Среднее:' in line and i + 1 < len(lines):
+            # Ищем числовые значения в текущей и следующих строках
+            numbers = re.findall(r'\d+\.\d+', line + ' ' + lines[i+1] if i+1 < len(lines) else line)
+            
+            if len(numbers) >= 8:
+                elements = ['C', 'Si', 'Mn', 'P', 'S', 'Cr', 'Mo', 'Ni']
+                for idx, elem in enumerate(elements):
+                    if idx < len(numbers):
+                        current_sample[elem] = float(numbers[idx])
+            
+            # Пропускаем дополнительные строки таблицы
+            i += 2
+        
+        i += 1
     
-    for section in samples_sections[1:]:  # Пропускаем первую секцию (заголовок)
-        sample_data = {}
-        
-        # Извлекаем название образца
-        sample_name_match = re.search(r'^ (.+)', section)
-        if sample_name_match:
-            sample_data['Наименование образца'] = sample_name_match.group(1).strip()
-        
-        # Извлекаем марку стали
-        steel_grade_match = re.search(steel_grade_pattern, section)
-        if steel_grade_match:
-            sample_data['Марка стали'] = steel_grade_match.group(1).strip()
-        
-        # Ищем таблицу с химическим составом
-        table_match = re.search(r'Среднее:\s*\*\*([\d\.]+)\*\*\s*\*\*([\d\.]+)\*\*\s*\*\*([\d\.]+)\*\*\s*\*\*([\d\.]+)\*\*\s*\*\*([\d\.]+)\*\*\s*\*\*([\d\.]+)\*\*\s*\*\*([\d\.]+)\*\*\s*\*\*([\d\.]+)\*\*', section)
-        
-        if table_match:
-            elements = ['C', 'Si', 'Mn', 'P', 'S', 'Cr', 'Mo', 'Ni']
-            for i, element in enumerate(elements, 1):
-                sample_data[element] = float(table_match.group(i))
-        
-        # Ищем вторую часть таблицы
-        table2_match = re.search(r'\*\*([\d\.]+)\*\*\s*\*\*([\d\.]+)\*\*\s*\*\*([\d\.]+)\*\*\s*\*\*([\d\.]+)\*\*\s*\*\*([\d\.]+)\*\*\s*\*\*([\d\.]+)\*\*\s*\*\*([\d\.]+)\*\*\s*\*\*([\d\.]+)\*\*', section)
-        
-        if table2_match:
-            elements2 = ['Cu', 'Al', 'Co', 'Nb', 'Ti', 'V', 'W', 'Fe']
-            for i, element in enumerate(elements2, 1):
-                sample_data[element] = float(table2_match.group(i))
-        
-        if sample_data:
-            samples_data.append(sample_data)
+    if current_sample:
+        samples.append(current_sample)
     
-    return samples_data
+    return samples
 
-def main():
-    st.title("Анализ химического состава металла")
-    st.subheader("Извлечение данных из протокола испытаний")
+def main_simple():
+    st.title("Анализатор протокола химического состава")
     
-    uploaded_file = st.file_uploader("Загрузите файл .docx с протоколом испытаний", type="docx")
+    st.write("""
+    Если DOCX парсер не работает, попробуйте этот вариант:
+    1. Откройте ваш DOCX файл
+    2. Скопируйте весь текст (Ctrl+A, Ctrl+C)
+    3. Вставьте в поле ниже
+    """)
     
-    if uploaded_file is not None:
-        try:
-            # Читаем DOCX файл
-            doc = Document(uploaded_file)
-            
-            # Извлекаем весь текст
-            full_text = ""
-            for paragraph in doc.paragraphs:
-                full_text += paragraph.text + "\n"
-            
-            # Для таблиц в docx
-            for table in doc.tables:
-                for row in table.rows:
-                    for cell in row.cells:
-                        full_text += cell.text + " | "
-                    full_text += "\n"
-                full_text += "\n"
-            
-            # Извлекаем данные
-            samples_data = extract_sample_data(full_text)
-            
-            if samples_data:
-                # Создаем DataFrame
-                df = pd.DataFrame(samples_data)
-                
-                # Отображаем результаты
-                st.success(f"Успешно извлечено данных для {len(samples_data)} образцов")
-                
-                # Показываем таблицу
-                st.dataframe(df, use_container_width=True)
-                
-                # Показываем статистику
-                st.subheader("Статистика по химическим элементам")
-                numeric_cols = df.select_dtypes(include=['float64']).columns
-                if len(numeric_cols) > 0:
-                    st.dataframe(df[numeric_cols].describe(), use_container_width=True)
-                
-                # Кнопка для скачивания данных
-                csv = df.to_csv(index=False, encoding='utf-8-sig')
-                st.download_button(
-                    label="Скачать данные в CSV",
-                    data=csv,
-                    file_name="химический_состав_металла.csv",
-                    mime="text/csv"
-                )
-            else:
-                st.error("Не удалось извлечь данные из файла. Проверьте формат документа.")
-                
-        except Exception as e:
-            st.error(f"Ошибка при обработке файла: {str(e)}")
+    text_input = st.text_area("Вставьте текст протокола сюда:", height=400)
     
-    else:
-        st.info("Пожалуйста, загрузите файл формата .docx с протоколом испытаний")
+    if st.button("Анализировать текст") and text_input:
+        samples = parse_protocol_text(text_input)
+        
+        if samples:
+            df = pd.DataFrame(samples)
+            st.success(f"Найдено {len(samples)} образцов")
+            st.dataframe(df, use_container_width=True)
+            
+            # Скачивание
+            csv = df.to_csv(index=False, encoding='utf-8-sig')
+            st.download_button(
+                "Скачать CSV",
+                csv,
+                "chemical_composition.csv",
+                "text/csv"
+            )
+        else:
+            st.error("Не удалось найти данные образцов в тексте")
 
+# Запустите main_simple() если основной не работает
 if __name__ == "__main__":
-    main()
+    main()  # или main_simple() для текстового варианта
