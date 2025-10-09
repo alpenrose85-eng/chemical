@@ -187,43 +187,34 @@ class SampleNameMatcher:
                 best_match = correct_sample
         
         # Возвращаем совпадение только если score достаточно высок
-        return best_match if best_score >= 2 else None
+        return best_match if best_score >= 3 else None
     
     def calculate_match_score(self, protocol_sample, correct_sample):
         """Вычисление оценки соответствия между образцами с улучшенной логикой"""
         score = 0
         
-        # Совпадение типа поверхности (2 балла)
+        # 1. Совпадение типа поверхности - ОСНОВНОЙ КРИТЕРИЙ (3 балла)
         if (protocol_sample['surface_type'] and 
             correct_sample['surface_type'] and 
             protocol_sample['surface_type'] == correct_sample['surface_type']):
-            score += 2
+            score += 3
+        else:
+            # Если тип поверхности не совпадает - сразу низкий балл
+            return 0
         
-        # Совпадение номера трубы (2 балла)
-        if (protocol_sample['tube_number'] and 
-            correct_sample['tube_number'] and 
-            protocol_sample['tube_number'] == correct_sample['tube_number']):
-            score += 2
-        
-        # Совпадение буквы нитки (2 балла) - ВАЖНО!
+        # 2. Совпадение буквы нитки - ВТОРОЙ ПО ВАЖНОСТИ (2 балла)
         if (protocol_sample['letter'] and 
             correct_sample['letter'] and 
             protocol_sample['letter'] == correct_sample['letter']):
             score += 2
+        else:
+            # Если буква не совпадает - значительно снижаем балл
+            score -= 1
         
-        # Дополнительные баллы за комбинации
-        # Если совпали номер трубы и буква - очень сильное совпадение
-        if (protocol_sample['tube_number'] and correct_sample['tube_number'] and
-            protocol_sample['letter'] and correct_sample['letter'] and
-            protocol_sample['tube_number'] == correct_sample['tube_number'] and
-            protocol_sample['letter'] == correct_sample['letter']):
-            score += 3
-        
-        # Если совпали тип поверхности и буква
-        if (protocol_sample['surface_type'] and correct_sample['surface_type'] and
-            protocol_sample['letter'] and correct_sample['letter'] and
-            protocol_sample['surface_type'] == correct_sample['surface_type'] and
-            protocol_sample['letter'] == correct_sample['letter']):
+        # 3. Совпадение номера трубы (2 балла)
+        if (protocol_sample['tube_number'] and 
+            correct_sample['tube_number'] and 
+            protocol_sample['tube_number'] == correct_sample['tube_number']):
             score += 2
         
         return score
@@ -434,12 +425,13 @@ class ChemicalAnalyzer:
         
         matched_samples = []
         unmatched_samples = []
+        used_correct_names = set()  # Для отслеживания уже использованных правильных названий
         
         for sample in samples:
             protocol_sample_info = self.name_matcher.parse_protocol_sample_name(sample['name'])
             best_match = self.name_matcher.find_best_match(protocol_sample_info, correct_samples)
             
-            if best_match:
+            if best_match and best_match['original'] not in used_correct_names:
                 # Создаем копию образца с исправленным названием и номером
                 corrected_sample = sample.copy()
                 corrected_sample['original_name'] = sample['name']  # Сохраняем оригинальное название
@@ -455,8 +447,9 @@ class ChemicalAnalyzer:
                 }
                 
                 matched_samples.append(corrected_sample)
+                used_correct_names.add(best_match['original'])  # Помечаем как использованное
             else:
-                # Если совпадение не найдено, оставляем оригинальное название
+                # Если совпадение не найдено или уже использовано, оставляем оригинальное название
                 sample['original_name'] = sample['name']  # Сохраняем для информации
                 sample['correct_number'] = None  # Нет номера для сортировки
                 sample['automatically_matched'] = False
@@ -623,9 +616,6 @@ class ChemicalAnalyzer:
             }
         
         return tables
-
-# Остальные функции (add_manual_matching_interface, apply_styling, set_font_times_new_roman, main, create_word_report) 
-# остаются без изменений, как в предыдущем коде
 
 def add_manual_matching_interface(samples, correct_samples, analyzer):
     """Интерфейс для ручного сопоставления образцов"""
