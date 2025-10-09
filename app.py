@@ -512,19 +512,16 @@ class ChemicalAnalyzer:
             data = []
             compliance_data = []  # Для хранения информации о соответствии
             
-            # Добавляем образцы
-            for idx, sample in enumerate(grade_samples_sorted):
-                # Используем correct_number для отображения, если есть
-                display_number = sample.get('correct_number', 'н/д')
+            # Добавляем образцы с последовательной нумерацией начиная с 1
+            for idx, sample in enumerate(grade_samples_sorted, 1):
+                # Используем последовательную нумерацию начиная с 1 для каждой таблицы
+                display_number = idx
                 
-                # Добавляем колонку с исходным названием
-                original_name = sample.get('original_name', '')
                 row = {
                     "№": display_number, 
-                    "Исходное название": original_name,
                     "Образец": sample["name"]
                 }
-                compliance_row = {"№": "normal", "Исходное название": "normal", "Образец": "normal"}
+                compliance_row = {"№": "normal", "Образец": "normal"}
                 
                 for elem in norm_elements:
                     if elem in sample["composition"]:
@@ -546,8 +543,8 @@ class ChemicalAnalyzer:
                 compliance_data.append(compliance_row)
             
             # Добавляем строку с нормативами
-            requirements_row = {"№": "", "Исходное название": "", "Образец": f"Требования ТУ 14-3Р-55-2001 для стали марки {grade}"}
-            requirements_compliance = {"№": "requirements", "Исходное название": "requirements", "Образец": "requirements"}
+            requirements_row = {"№": "", "Образец": f"Требования ТУ 14-3Р-55-2001 для стали марки {grade}"}
+            requirements_compliance = {"№": "requirements", "Образец": "requirements"}
             
             for elem in norm_elements:
                 min_val, max_val = standard[elem]
@@ -577,7 +574,7 @@ class ChemicalAnalyzer:
             tables[grade] = {
                 "data": pd.DataFrame(data),
                 "compliance": compliance_data,
-                "columns_order": ["№", "Исходное название", "Образец"] + norm_elements
+                "columns_order": ["№", "Образец"] + norm_elements
             }
         
         return tables
