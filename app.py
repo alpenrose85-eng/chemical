@@ -409,7 +409,7 @@ class ChemicalAnalyzer:
             return []
     
     def parse_composition_table_corrected(self, table):
-        """Правильный парсинг таблицы с химическим составом - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
+        """Правильный парсинг таблицы с химическим составом - ПЕРЕПИСАННАЯ ВЕРСИЯ"""
         composition = {}
         
         try:
@@ -417,168 +417,276 @@ class ChemicalAnalyzer:
             all_data = []
             for row in table.rows:
                 row_data = [cell.text.strip() for cell in row.cells]
-                all_data.append(row_data)
+                # Фильтруем пустые строки
+                if any(cell.strip() for cell in row_data):
+                    all_data.append(row_data)
             
-            # Отладочная информация о таблице
-            debug_info = []
-            for i, row in enumerate(all_data):
-                debug_info.append(f"Строка {i}: {row}")
-            
-            # Ищем строку с заголовками элементов (первая группа)
-            header_row_idx = None
-            elements_first_group = ["C", "Si", "Mn", "P", "S", "Cr", "Mo", "Ni"]
-            
-            for i, row in enumerate(all_data):
-                # Ищем строку, где есть несколько элементов из первой группы
-                found_elements = [elem for elem in elements_first_group if any(elem in cell for cell in row)]
-                if len(found_elements) >= 3:  # Если нашли хотя бы 3 элемента
-                    header_row_idx = i
-                    break
-            
-            if header_row_idx is None:
-                st.warning("Не найдена строка с заголовками элементов")
+            # Если таблица пустая, возвращаем пустой состав
+            if not all_data:
                 return composition
             
-            # Ищем строку со средними значениями для первой группы
-            avg_row_idx_first = None
-            for i in range(header_row_idx + 1, min(header_row_idx + 6, len(all_data))):
-                row = all_data[i]
-                # Проверяем, есть ли в строке числовые значения
-                numeric_count = 0
-                for cell in row:
-                    try:
-                        cell_clean = cell.replace(',', '.').replace('±', ' ').split()[0]
-                        float(cell_clean)
-                        numeric_count += 1
-                    except:
-                        pass
-                
-                if numeric_count >= 5:  # Если достаточно чисел
-                    avg_row_idx_first = i
-                    break
+            # ОТЛАДКА: показываем структуру таблицы
+            with st.expander("🔍 Отладка структуры таблицы"):
+                st.write("Всего строк в таблице:", len(all_data))
+                for i, row in enumerate(all_data):
+                    st.write(f"Строка {i}: {row}")
             
-            # Ищем строку с заголовками элементов (вторая группа)
-            header_row_idx_second = None
-            elements_second_group = ["Cu", "Al", "Co", "Nb", "Ti", "V", "W", "Fe"]
+            # Все возможные элементы для поиска
+            all_elements = ["C", "Si", "Mn", "P", "S", "Cr", "Mo", "Ni", 
+                           "Cu", "Al", "Co", "Nb", "Ti", "V", "W", "Fe"]
             
-            for i in range(avg_row_idx_first if avg_row_idx_first else header_row_idx + 1, len(all_data)):
-                row = all_data[i]
-                # Ищем строку, где есть несколько элементов из второй группы
-                found_elements = [elem for elem in elements_second_group if any(elem in cell for cell in row)]
-                if len(found_elements) >= 3:  # Если нашли хотя бы 3 элемента
-                    header_row_idx_second = i
-                    break
+            # СЛУЧАЙ 1: Ищем классическую структуру с двумя группами элементов
+            if len(all_data) >= 13:
+                composition = self._parse_standard_two_group_structure(all_data)
             
-            # Ищем строку со средними значениями для второй группы
-            avg_row_idx_second = None
-            if header_row_idx_second:
-                for i in range(header_row_idx_second + 1, min(header_row_idx_second + 6, len(all_data))):
-                    row = all_data[i]
-                    # Проверяем, есть ли в строке числовые значения
-                    numeric_count = 0
-                    for cell in row:
-                        try:
-                            cell_clean = cell.replace(',', '.').replace('±', ' ').split()[0]
-                            float(cell_clean)
-                            numeric_count += 1
-                        except:
-                            pass
-                    
-                    if numeric_count >= 5:  # Если достаточно чисел
-                        avg_row_idx_second = i
-                        break
-            
-            # Извлекаем значения для первой группы элементов
-            if header_row_idx is not None and avg_row_idx_first is not None:
-                headers_first = all_data[header_row_idx]
-                values_first = all_data[avg_row_idx_first]
-                
-                # Сопоставляем заголовки со значениями
-                for i, header in enumerate(headers_first):
-                    if i < len(values_first):
-                        for element in elements_first_group:
-                            if element in header:
-                                value_str = values_first[i]
-                                try:
-                                    value_str = value_str.replace(',', '.').replace('±', ' ').split()[0]
-                                    value = float(value_str)
-                                    composition[element] = value
-                                    break
-                                except (ValueError, IndexError):
-                                    continue
-            
-            # Извлекаем значения для второй группы элементов
-            if header_row_idx_second is not None and avg_row_idx_second is not None:
-                headers_second = all_data[header_row_idx_second]
-                values_second = all_data[avg_row_idx_second]
-                
-                # Сопоставляем заголовки со значениями
-                for i, header in enumerate(headers_second):
-                    if i < len(values_second):
-                        for element in elements_second_group:
-                            if element in header:
-                                value_str = values_second[i]
-                                try:
-                                    value_str = value_str.replace(',', '.').replace('±', ' ').split()[0]
-                                    value = float(value_str)
-                                    composition[element] = value
-                                    break
-                                except (ValueError, IndexError):
-                                    continue
-            
-            # Альтернативный подход: если не нашли значения по заголовкам, используем фиксированные позиции
+            # СЛУЧАЙ 2: Если стандартная структура не сработала, ищем альтернативные варианты
             if not composition:
-                composition = self.parse_composition_by_fixed_positions(all_data)
+                composition = self._parse_alternative_structures(all_data)
+            
+            # СЛУЧАЙ 3: Резервный метод - поиск по всей таблице
+            if not composition:
+                composition = self._parse_fallback_method(all_data)
+            
+            # ОТЛАДКА: показываем результат парсинга
+            if composition:
+                st.success(f"✅ Распознано элементов: {len(composition)}")
+                with st.expander("📊 Распознанный состав"):
+                    for element, value in composition.items():
+                        st.write(f"{element}: {value}")
+            else:
+                st.warning("❌ Не удалось распознать химический состав")
             
             return composition
             
         except Exception as e:
             st.error(f"Ошибка при парсинге таблицы: {str(e)}")
+            import traceback
+            st.error(f"Детали ошибки: {traceback.format_exc()}")
             return {}
-    
-    def parse_composition_by_fixed_positions(self, all_data):
-        """Парсинг состава по фиксированным позициям (резервный метод)"""
+
+    def _parse_standard_two_group_structure(self, all_data):
+        """Парсинг стандартной структуры с двумя группами элементов"""
         composition = {}
         
         try:
-            # Стандартные позиции элементов в таблицах вашего документа
-            # Первая группа: строки 0-6, вторая группа: строки 7-13
+            # ПЕРВАЯ ГРУППА ЭЛЕМЕНТОВ (обычно строки 0-6)
+            first_group_elements = ["C", "Si", "Mn", "P", "S", "Cr", "Mo", "Ni"]
             
-            # Первая группа элементов (C, Si, Mn, P, S, Cr, Mo, Ni)
-            if len(all_data) > 5:
-                first_group_row = all_data[5]  # Строка со средними для первой группы
-                elements_first = ["C", "Si", "Mn", "P", "S", "Cr", "Mo", "Ni"]
-                
-                for i, element in enumerate(elements_first):
-                    if i < len(first_group_row):
-                        value_str = first_group_row[i]
-                        try:
-                            value_str = value_str.replace(',', '.').replace('±', ' ').split()[0]
-                            value = float(value_str)
-                            composition[element] = value
-                        except (ValueError, IndexError):
-                            continue
+            # Ищем строку с заголовками первой группы
+            header_row_1 = None
+            for i in range(min(3, len(all_data))):  # Ищем в первых 3 строках
+                row = all_data[i]
+                found_elements = [elem for elem in first_group_elements if any(elem in cell for cell in row)]
+                if len(found_elements) >= 3:
+                    header_row_1 = i
+                    break
             
-            # Вторая группа элементов (Cu, Al, Co, Nb, Ti, V, W, Fe)
-            if len(all_data) > 12:
-                second_group_row = all_data[12]  # Строка со средними для второй группы
-                elements_second = ["Cu", "Al", "Co", "Nb", "Ti", "V", "W", "Fe"]
-                
-                for i, element in enumerate(elements_second):
-                    if i < len(second_group_row):
-                        value_str = second_group_row[i]
-                        try:
-                            value_str = value_str.replace(',', '.').replace('±', ' ').split()[0]
-                            value = float(value_str)
-                            composition[element] = value
-                        except (ValueError, IndexError):
-                            continue
+            if header_row_1 is not None:
+                # Ищем строку со значениями для первой группы (обычно через 2-4 строки)
+                for value_row_idx in range(header_row_1 + 2, min(header_row_1 + 6, len(all_data))):
+                    values_row = all_data[value_row_idx]
+                    
+                    # Проверяем, что в строке есть числа
+                    numeric_count = 0
+                    for cell in values_row:
+                        if self._is_numeric_value(cell):
+                            numeric_count += 1
+                    
+                    if numeric_count >= 4:  # Достаточно чисел для первой группы
+                        # Сопоставляем заголовки со значениями
+                        headers = all_data[header_row_1]
+                        values = values_row
+                        
+                        for i, header in enumerate(headers):
+                            if i < len(values):
+                                for element in first_group_elements:
+                                    if element in header and self._is_numeric_value(values[i]):
+                                        try:
+                                            value = self._parse_numeric_value(values[i])
+                                            composition[element] = value
+                                            break
+                                        except:
+                                            continue
+                        break
+            
+            # ВТОРАЯ ГРУППА ЭЛЕМЕНТОВ (обычно строки 7-13)
+            second_group_elements = ["Cu", "Al", "Co", "Nb", "Ti", "V", "W", "Fe"]
+            
+            # Ищем строку с заголовками второй группы
+            header_row_2 = None
+            for i in range(6, min(10, len(all_data))):  # Ищем в строках 6-9
+                row = all_data[i]
+                found_elements = [elem for elem in second_group_elements if any(elem in cell for cell in row)]
+                if len(found_elements) >= 2:
+                    header_row_2 = i
+                    break
+            
+            if header_row_2 is not None:
+                # Ищем строку со значениями для второй группы
+                for value_row_idx in range(header_row_2 + 2, min(header_row_2 + 6, len(all_data))):
+                    values_row = all_data[value_row_idx]
+                    
+                    # Проверяем, что в строке есть числа
+                    numeric_count = 0
+                    for cell in values_row:
+                        if self._is_numeric_value(cell):
+                            numeric_count += 1
+                    
+                    if numeric_count >= 3:  # Достаточно чисел для второй группы
+                        # Сопоставляем заголовки со значениями
+                        headers = all_data[header_row_2]
+                        values = values_row
+                        
+                        for i, header in enumerate(headers):
+                            if i < len(values):
+                                for element in second_group_elements:
+                                    if element in header and self._is_numeric_value(values[i]):
+                                        try:
+                                            value = self._parse_numeric_value(values[i])
+                                            composition[element] = value
+                                            break
+                                        except:
+                                            continue
+                        break
             
             return composition
             
         except Exception as e:
-            st.error(f"Ошибка при парсинге таблицы фиксированным методом: {str(e)}")
+            st.error(f"Ошибка в стандартном парсинге: {str(e)}")
             return {}
+
+    def _parse_alternative_structures(self, all_data):
+        """Парсинг альтернативных структур таблиц"""
+        composition = {}
+        
+        try:
+            # МЕТОД 1: Поиск пар "заголовок-значение" в соседних строках
+            all_elements = ["C", "Si", "Mn", "P", "S", "Cr", "Mo", "Ni", 
+                           "Cu", "Al", "Co", "Nb", "Ti", "V", "W", "Fe"]
+            
+            for i in range(len(all_data) - 1):
+                current_row = all_data[i]
+                next_row = all_data[i + 1] if i + 1 < len(all_data) else []
+                
+                # Ищем элементы в текущей строке
+                for j, cell in enumerate(current_row):
+                    for element in all_elements:
+                        if element in cell and j < len(next_row):
+                            value_str = next_row[j]
+                            if self._is_numeric_value(value_str):
+                                try:
+                                    value = self._parse_numeric_value(value_str)
+                                    composition[element] = value
+                                except:
+                                    pass
+            
+            # МЕТОД 2: Поиск в типичных позициях (более гибкий, чем фиксированные индексы)
+            if len(all_data) > 5:
+                # Пробуем разные строки для значений
+                candidate_rows = []
+                for i in range(len(all_data)):
+                    row = all_data[i]
+                    numeric_count = sum(1 for cell in row if self._is_numeric_value(cell))
+                    if numeric_count >= 5:
+                        candidate_rows.append((i, numeric_count))
+                
+                # Сортируем по количеству чисел
+                candidate_rows.sort(key=lambda x: x[1], reverse=True)
+                
+                if candidate_rows:
+                    # Берем строку с максимальным количеством чисел
+                    best_row_idx = candidate_rows[0][0]
+                    best_row = all_data[best_row_idx]
+                    
+                    # Сопоставляем с типичным порядком элементов
+                    common_orders = [
+                        ["C", "Si", "Mn", "P", "S", "Cr", "Mo", "Ni", "Cu", "Al", "Co", "Nb", "Ti", "V", "W", "Fe"],
+                        ["C", "Si", "Mn", "Cr", "Ni", "Mo", "V", "Cu", "P", "S"],
+                        ["C", "Si", "Mn", "P", "S", "Cr", "Ni", "Cu"]
+                    ]
+                    
+                    for order in common_orders:
+                        if len(best_row) >= len(order):
+                            for idx, element in enumerate(order):
+                                if idx < len(best_row) and self._is_numeric_value(best_row[idx]):
+                                    try:
+                                        value = self._parse_numeric_value(best_row[idx])
+                                        composition[element] = value
+                                    except:
+                                        pass
+            
+            return composition
+            
+        except Exception as e:
+            st.error(f"Ошибка в альтернативном парсинге: {str(e)}")
+            return {}
+
+    def _parse_fallback_method(self, all_data):
+        """Резервный метод парсинга - поиск по шаблонам"""
+        composition = {}
+        
+        try:
+            # Объединяем все данные в один текст для поиска по шаблонам
+            full_text = " ".join([" ".join(row) for row in all_data])
+            
+            # Шаблоны для поиска элементов со значениями
+            patterns = {
+                "C": r"C[^A-Za-z0-9]*([0-9]+[,.][0-9]+)",
+                "Si": r"Si[^A-Za-z0-9]*([0-9]+[,.][0-9]+)", 
+                "Mn": r"Mn[^A-Za-z0-9]*([0-9]+[,.][0-9]+)",
+                "P": r"P[^A-Za-z0-9]*([0-9]+[,.][0-9]+)",
+                "S": r"S[^A-Za-z0-9]*([0-9]+[,.][0-9]+)",
+                "Cr": r"Cr[^A-Za-z0-9]*([0-9]+[,.][0-9]+)",
+                "Mo": r"Mo[^A-Za-z0-9]*([0-9]+[,.][0-9]+)",
+                "Ni": r"Ni[^A-Za-z0-9]*([0-9]+[,.][0-9]+)",
+                "Cu": r"Cu[^A-Za-z0-9]*([0-9]+[,.][0-9]+)",
+                "V": r"V[^A-Za-z0-9]*([0-9]+[,.][0-9]+)"
+            }
+            
+            for element, pattern in patterns.items():
+                matches = re.findall(pattern, full_text, re.IGNORECASE)
+                if matches:
+                    try:
+                        # Берем первое найденное значение
+                        value_str = matches[0].replace(',', '.')
+                        value = float(value_str)
+                        composition[element] = value
+                    except:
+                        continue
+            
+            return composition
+            
+        except Exception as e:
+            st.error(f"Ошибка в резервном парсинге: {str(e)}")
+            return {}
+
+    def _is_numeric_value(self, text):
+        """Проверяет, является ли текст числовым значением"""
+        if not text or text.strip() == "":
+            return False
+        
+        # Очищаем текст
+        clean_text = text.replace(',', '.').replace('±', ' ').replace(' ', '').split()[0]
+        
+        # Проверяем на число
+        try:
+            float(clean_text)
+            return True
+        except:
+            return False
+
+    def _parse_numeric_value(self, text):
+        """Извлекает числовое значение из текста"""
+        if not text:
+            return 0.0
+        
+        # Очищаем текст
+        clean_text = text.replace(',', '.').replace('±', ' ').split()[0]
+        
+        try:
+            return float(clean_text)
+        except:
+            raise ValueError(f"Не могу преобразовать '{text}' в число")
     
     def match_sample_names(self, samples, correct_names_file):
         """Сопоставление названий образцов с правильными названиями - УЛУЧШЕННАЯ ВЕРСИЯ"""
@@ -774,9 +882,6 @@ class ChemicalAnalyzer:
         
         return tables
 
-# Остальные функции (add_manual_matching_interface, add_manual_steel_grade_correction, apply_styling, set_font_times_new_roman, create_word_report, main) 
-# остаются без изменений, как в предыдущем коде
-
 def add_manual_matching_interface(samples, correct_samples, analyzer):
     """Интерфейс для ручного сопоставления образцов с фильтрацией - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
     st.header("🔧 Ручное сопоставление образцов")
@@ -922,6 +1027,71 @@ def add_manual_steel_grade_correction(samples):
     if st.button("✅ Применить ручные исправления марок стали"):
         st.success("Марки стали обновлены!")
         st.info("💡 Обновите страницу для отображения обновленных данных")
+        return updated_samples
+    
+    return samples
+
+def add_manual_composition_correction(samples):
+    """Интерфейс для ручного исправления химического состава"""
+    st.header("🔧 Ручное исправление химического состава")
+    
+    if 'corrected_compositions' not in st.session_state:
+        st.session_state.corrected_compositions = {}
+    
+    all_elements = ["C", "Si", "Mn", "P", "S", "Cr", "Mo", "Ni", 
+                   "Cu", "Al", "Co", "Nb", "Ti", "V", "W", "Fe"]
+    
+    for i, sample in enumerate(samples):
+        st.subheader(f"Образец: {sample['name']}")
+        
+        if sample.get('steel_grade'):
+            st.write(f"**Марка стали:** {sample['steel_grade']}")
+        
+        # Создаем уникальный ключ для этого образца
+        sample_key = f"{sample['name']}_{i}"
+        
+        # Инициализируем исправленный состав, если его еще нет
+        if sample_key not in st.session_state.corrected_compositions:
+            st.session_state.corrected_compositions[sample_key] = sample.get('composition', {}).copy()
+        
+        current_composition = st.session_state.corrected_compositions[sample_key]
+        
+        # Показываем текущий состав
+        st.write("**Текущий состав:**")
+        cols = st.columns(4)
+        
+        for idx, element in enumerate(all_elements):
+            col_idx = idx % 4
+            with cols[col_idx]:
+                current_value = current_composition.get(element, 0.0)
+                new_value = st.number_input(
+                    f"{element}",
+                    min_value=0.0,
+                    max_value=100.0,
+                    value=float(current_value),
+                    step=0.001,
+                    format="%.3f",
+                    key=f"comp_{sample_key}_{element}"
+                )
+                current_composition[element] = new_value
+        
+        # Кнопка сброса для этого образца
+        if st.button(f"🔄 Сбросить для {sample['name']}", key=f"reset_{sample_key}"):
+            st.session_state.corrected_compositions[sample_key] = sample.get('composition', {}).copy()
+            st.experimental_rerun()
+    
+    # Кнопка применения всех изменений
+    if st.button("✅ Применить все исправления состава"):
+        updated_samples = []
+        for i, sample in enumerate(samples):
+            sample_key = f"{sample['name']}_{i}"
+            updated_sample = sample.copy()
+            if sample_key in st.session_state.corrected_compositions:
+                updated_sample['composition'] = st.session_state.corrected_compositions[sample_key].copy()
+                updated_sample['composition_corrected'] = True
+            updated_samples.append(updated_sample)
+        
+        st.success("Химический состав исправлен!")
         return updated_samples
     
     return samples
@@ -1195,6 +1365,11 @@ def main():
             
             # Добавляем ручную коррекцию марок стали
             all_samples = add_manual_steel_grade_correction(all_samples)
+            
+            # ДОБАВЛЯЕМ РУЧНОЕ ИСПРАВЛЕНИЕ СОСТАВА
+            st.subheader("🔧 Коррекция химического состава")
+            if st.checkbox("Включить ручное исправление химического состава"):
+                all_samples = add_manual_composition_correction(all_samples)
             
             # Сопоставляем названия, если загружен файл с правильными названиями
             if correct_names_file and correct_samples:
