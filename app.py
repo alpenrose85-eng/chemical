@@ -547,7 +547,7 @@ class ChemicalAnalyzer:
         correct_names_list = [cs['original'] for cs in correct_samples]
         used_correct_names = {}
         for sample in editable_samples:
-            if sample.get('automatically_matched') and sample['matched_name'] in correct_names_list:
+            if sample.get('automatically_matched') and sample['name'] in correct_names_list:
                 used_correct_names[sample['matched_name']] = sample['name']
 
         conflict_samples = {}
