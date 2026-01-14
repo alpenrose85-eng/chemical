@@ -853,8 +853,21 @@ def main():
 
         if correct_names_file and correct_samples:
             st.subheader("🔍 Автоматическое сопоставление названий образцов")
-            all_samples, correct_samples_loaded = analyzer.match_sample_names(all_samples, correct_names_file)
-            all_samples = analyzer.add_manual_matching_interface(all_samples, correct_samples_loaded, analyzer)
+            auto_matched_samples, correct_samples_loaded = analyzer.match_sample_names(all_samples, correct_names_file)
+
+            # 🔑 КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: используем session_state для сохранения ручного сопоставления
+            if 'manually_matched_samples' not in st.session_state:
+                st.session_state.manually_matched_samples = auto_matched_samples
+
+            result_from_ui = analyzer.add_manual_matching_interface(
+                st.session_state.manually_matched_samples,
+                correct_samples_loaded,
+                analyzer
+            )
+
+            # Обновляем состояние только если пользователь нажал "Применить"
+            st.session_state.manually_matched_samples = result_from_ui
+            all_samples = st.session_state.manually_matched_samples
 
         if all_samples:
             st.header("Результаты анализа")
