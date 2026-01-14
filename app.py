@@ -12,6 +12,9 @@ from docx.shared import Pt
 import re
 from difflib import SequenceMatcher
 
+# --- [Остальные классы остаются без изменений: SampleNameMatcher, ChemicalAnalyzer] ---
+# (они уже поддерживают списки, поэтому не требуют правки)
+
 class SampleNameMatcher:
     def __init__(self):
         self.surface_types = {
@@ -25,7 +28,6 @@ class SampleNameMatcher:
         self.letters = ['А', 'Б', 'В', 'Г']
 
     def parse_correct_names(self, file_content):
-        """Парсинг файла с правильными названиями образцов из таблицы"""
         try:
             doc = Document(io.BytesIO(file_content))
             correct_names = []
@@ -63,7 +65,6 @@ class SampleNameMatcher:
             return []
 
     def extract_surface_type(self, name):
-        """Извлечение типа поверхности нагрева из названия"""
         normalized_name = self.normalize_roman_numerals(name)
         for surface_type, patterns in self.surface_types.items():
             for pattern in patterns:
@@ -78,7 +79,6 @@ class SampleNameMatcher:
         return None
 
     def normalize_roman_numerals(self, text):
-        """Нормализация римских цифр и суффиксов в тексте"""
         replacements = [
             (' НД-I', ' НД-1'),
             (' НД-II', ' НД-2'),
@@ -101,11 +101,9 @@ class SampleNameMatcher:
         return result
 
     def similar(self, a, b):
-        """Вычисление схожести строк"""
         return SequenceMatcher(None, a, b).ratio()
 
     def extract_tube_number(self, name):
-        """Извлечение номера трубы из названия"""
         matches = re.findall(r'\((\d+)[,-]', name)
         if matches:
             return matches[0]
@@ -124,7 +122,6 @@ class SampleNameMatcher:
         return None
 
     def extract_letter(self, name):
-        """Извлечение буквы (А, Б, В, Г) из названия"""
         matches = re.findall(r'\([^)]*([А-Г])\)', name)
         if matches:
             return matches[0]
@@ -137,9 +134,7 @@ class SampleNameMatcher:
         return None
 
     def parse_protocol_sample_name(self, sample_name):
-        """Парсинг названия образца из протокола химического анализа"""
         original_name = sample_name
-        # 1. Сначала определяем букву нитки
         letter = None
         letter_map = {'НА': 'А', 'НБ': 'Б', 'НВ': 'В', 'НГ': 'Г', 'Н-Г': 'Г'}
         for prefix, mapped_letter in letter_map.items():
@@ -157,7 +152,6 @@ class SampleNameMatcher:
                 if matches:
                     letter = matches[0]
                     break
-        # 2. Затем определяем номер трубы
         tube_number = None
         if letter:
             letter_patterns = [
@@ -182,7 +176,6 @@ class SampleNameMatcher:
             numbers = re.findall(r'\d+', sample_name)
             if numbers:
                 tube_number = numbers[0]
-        # 3. Определяем тип поверхности
         surface_type = self.extract_surface_type(sample_name)
         return {
             'original': original_name,
@@ -192,7 +185,6 @@ class SampleNameMatcher:
         }
 
     def match_samples(self, protocol_samples, correct_samples):
-        """Многоэтапное сопоставление образцов + финальное сопоставление остатков"""
         matched_samples = []
         unmatched_protocol = protocol_samples.copy()
         used_correct = set()
@@ -209,7 +201,6 @@ class SampleNameMatcher:
         matched_samples.extend(matches_stage3)
         unmatched_protocol = [s for s in unmatched_protocol if s not in [m[0] for m in matches_stage3]]
 
-        # 🔥 ИСПРАВЛЕНИЕ 1: Сопоставление последнего оставшегося образца
         unused_correct = [cs for cs in correct_samples if cs['original'] not in used_correct]
         if len(unmatched_protocol) == 1 and len(unused_correct) == 1:
             protocol = unmatched_protocol[0]
@@ -466,12 +457,14 @@ class ChemicalAnalyzer:
             return "normal"
 
     def create_report_table_with_original_names(self, samples):
-        if not samples:
+        # 🔥 ФИЛЬТРАЦИЯ: только сопоставленные образцы
+        filtered_samples = [s for s in samples if s.get('correct_number') is not None]
+        if not filtered_samples:
             return None
-        steel_grades = list(set(sample["steel_grade"] for sample in samples if sample["steel_grade"]))
+        steel_grades = list(set(sample["steel_grade"] for sample in filtered_samples if sample["steel_grade"]))
         tables = {}
         for grade in steel_grades:
-            grade_samples = [s for s in samples if s["steel_grade"] == grade]
+            grade_samples = [s for s in filtered_samples if s["steel_grade"] == grade]
             if grade not in self.standards:
                 st.warning(f"Нет нормативов для марки стали: {grade}")
                 continue
@@ -516,7 +509,6 @@ class ChemicalAnalyzer:
                 data.append(row)
                 compliance_data.append(compliance_row)
 
-            # Добавляем строку требований в конец
             requirements_row = {"№": "", "Образец": f"Требования ТУ 14-3Р-55-2001 для стали марки {grade}"}
             requirements_compliance = {"№": "requirements", "Образец": "requirements"}
             for elem in norm_elements:
@@ -686,12 +678,14 @@ def set_font_times_new_roman(doc):
 
 def create_word_report(tables, samples, analyzer):
     try:
+        # 🔥 ФИЛЬТРАЦИЯ: только сопоставленные образцы
+        filtered_samples = [s for s in samples if s.get('correct_number') is not None]
         doc = Document()
         set_font_times_new_roman(doc)
         title = doc.add_heading('Протокол анализа химического состава', 0)
         title.alignment = WD_ALIGN_PARAGRAPH.CENTER
         doc.add_paragraph(f"Дата формирования: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
-        doc.add_paragraph(f"Проанализировано образцов: {len(samples)}")
+        doc.add_paragraph(f"Проанализировано образцов: {len(filtered_samples)}")
         doc.add_paragraph("")
         doc.add_heading('Легенда', level=1)
         legend_table = doc.add_table(rows=3, cols=2)
@@ -838,7 +832,7 @@ def main():
                     })
                 st.table(pd.DataFrame(preview_data))
 
-    st.subheader("2. Загрузите файлы протоколов химического анализа")
+    st.subheader("2. Загрузите файлы протоколов химического анализа (можно несколько)")
     uploaded_files = st.file_uploader(
         "Файлы протоколов (.docx)",
         type=["docx"],
@@ -855,7 +849,6 @@ def main():
             st.subheader("🔍 Автоматическое сопоставление названий образцов")
             auto_matched_samples, correct_samples_loaded = analyzer.match_sample_names(all_samples, correct_names_file)
 
-            # 🔑 КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: используем session_state для сохранения ручного сопоставления
             if 'manually_matched_samples' not in st.session_state:
                 st.session_state.manually_matched_samples = auto_matched_samples
 
@@ -865,42 +858,53 @@ def main():
                 analyzer
             )
 
-            # Обновляем состояние только если пользователь нажал "Применить"
             st.session_state.manually_matched_samples = result_from_ui
             all_samples = st.session_state.manually_matched_samples
 
+            # 🔥 Подсчёт и вывод количества пропущенных
+            total_before = len(all_samples)
+            matched_samples = [s for s in all_samples if s.get('correct_number') is not None]
+            skipped = total_before - len(matched_samples)
+            if skipped > 0:
+                st.info(f"ℹ️ Пропущено {skipped} несопоставленных образцов (они не войдут в отчёт).")
+
         if all_samples:
-            st.header("Результаты анализа")
-            st.markdown("""
-            **Легенда:**
-            - <span style='background-color: #ffcccc; padding: 2px 5px; border-radius: 3px;'>🔴 Красный</span> - отклонение от норм
-            - <span style='background-color: #f0f0f0; padding: 2px 5px; border-radius: 3px;'>⚪ Серый</span> - нормативные требования
-            """, unsafe_allow_html=True)
+            # 🔥 Используем только сопоставленные для отображения и экспорта
+            matched_samples_for_display = [s for s in all_samples if s.get('correct_number') is not None]
+            if not matched_samples_for_display:
+                st.warning("Нет сопоставленных образцов для отображения.")
+            else:
+                st.header("Результаты анализа")
+                st.markdown("""
+                **Легенда:**
+                - <span style='background-color: #ffcccc; padding: 2px 5px; border-radius: 3px;'>🔴 Красный</span> - отклонение от норм
+                - <span style='background-color: #f0f0f0; padding: 2px 5px; border-radius: 3px;'>⚪ Серый</span> - нормативные требования
+                """, unsafe_allow_html=True)
 
-            report_tables = analyzer.create_report_table_with_original_names(all_samples)
-            export_tables = {}
-            if report_tables:
-                for grade, table_data in report_tables.items():
-                    st.subheader(f"Марка стали: {grade}")
-                    styled_table = apply_styling(table_data["data"], table_data["compliance"])
-                    st.dataframe(styled_table, use_container_width=True, hide_index=True)
-                    export_tables[grade] = table_data["data"]
+                report_tables = analyzer.create_report_table_with_original_names(all_samples)
+                export_tables = {}
+                if report_tables:
+                    for grade, table_data in report_tables.items():
+                        st.subheader(f"Марка стали: {grade}")
+                        styled_table = apply_styling(table_data["data"], table_data["compliance"])
+                        st.dataframe(styled_table, use_container_width=True, hide_index=True)
+                        export_tables[grade] = table_data["data"]
 
-                if st.button("📄 Экспорт в Word"):
-                    create_word_report(export_tables, all_samples, analyzer)
-                    st.success("Отчет готов к скачиванию!")
+                    if st.button("📄 Экспорт в Word"):
+                        create_word_report(export_tables, all_samples, analyzer)
+                        st.success("Отчет готов к скачиванию!")
 
-            st.header("Обработанные образцы")
-            for sample in all_samples:
-                with st.expander(f"📋 {sample['name']} - {sample['steel_grade']}"):
-                    if 'original_name' in sample:
-                        st.write(f"**Исходное название:** {sample['original_name']}")
-                    if 'correct_number' in sample:
-                        st.write(f"**Номер в списке:** {sample['correct_number']}")
-                    st.write(f"**Марка стали:** {sample['steel_grade']}")
-                    st.write("**Химический состав:**")
-                    for element, value in sample['composition'].items():
-                        st.write(f"- {element}: {value}")
+                st.header("Обработанные образцы")
+                for sample in matched_samples_for_display:
+                    with st.expander(f"📋 {sample['name']} - {sample['steel_grade']}"):
+                        if 'original_name' in sample:
+                            st.write(f"**Исходное название:** {sample['original_name']}")
+                        if 'correct_number' in sample:
+                            st.write(f"**Номер в списке:** {sample['correct_number']}")
+                        st.write(f"**Марка стали:** {sample['steel_grade']}")
+                        st.write("**Химический состав:**")
+                        for element, value in sample['composition'].items():
+                            st.write(f"- {element}: {value}")
 
 
 if __name__ == "__main__":
