@@ -360,53 +360,48 @@ class ChemicalAnalyzer:
             return []
 
     def parse_composition_table(self, table):
-        """Парсинг таблицы состава - берем средние значения"""
+        """Парсинг таблицы состава - ВОЗВРАЩАЕМ ИСХОДНЫЙ РАБОЧИЙ ПАРСИНГ"""
         composition = {}
         try:
-            # Собираем все данные таблицы
             table_data = []
             for row in table.rows:
                 row_data = [cell.text.strip() for cell in row.cells]
                 table_data.append(row_data)
-            
-            # Ищем строку со средними значениями
-            avg_row_index = -1
-            for i, row in enumerate(table_data):
-                if any('Среднее' in cell or 'среднее' in cell.lower() for cell in row):
-                    avg_row_index = i
-                    break
-            
-            # Если нашли строку "Среднее:", берем следующую строку
-            if avg_row_index != -1:
-                # Обычно строка со средними значениями идет сразу после "Среднее:"
-                if avg_row_index + 1 < len(table_data):
-                    avg_values_row = table_data[avg_row_index + 1]
-                    
-                    # Находим заголовки элементов - они обычно в строке над "Среднее:"
-                    headers_row = None
-                    for i in range(avg_row_index - 1, -1, -1):
-                        if i < len(table_data):
-                            # Проверяем, есть ли в строке названия элементов
-                            if any(elem in ' '.join(table_data[i]) for elem in self.all_elements):
-                                headers_row = table_data[i]
-                                break
-                    
-                    if headers_row:
-                        # Сопоставляем заголовки со значениями
-                        for i, header in enumerate(headers_row):
-                            if header in self.all_elements and i < len(avg_values_row):
-                                value_str = avg_values_row[i]
-                                try:
-                                    # Очищаем значение от ± и других символов
-                                    if '±' in value_str:
-                                        value_str = value_str.split('±')[0]
-                                    
-                                    value_str = value_str.replace(',', '.').strip()
-                                    value = float(value_str)
-                                    composition[header] = value
-                                except (ValueError, IndexError):
-                                    continue
-            
+
+            if len(table_data) < 13:
+                st.warning(f"Таблица имеет только {len(table_data)} строк, ожидалось минимум 13")
+                return composition
+
+            # Берем данные из строк как в исходной рабочей версии
+            headers_row1 = table_data[0]
+            values_row1 = table_data[5]
+            headers_row2 = table_data[7]
+            values_row2 = table_data[12]
+
+            for i, header in enumerate(headers_row1):
+                if header in self.all_elements and i < len(values_row1):
+                    value_str = values_row1[i]
+                    try:
+                        value_str = value_str.replace(',', '.').replace(' ', '')
+                        if '±' in value_str:
+                            value_str = value_str.split('±')[0]
+                        value = float(value_str)
+                        composition[header] = value
+                    except (ValueError, IndexError):
+                        continue
+
+            for i, header in enumerate(headers_row2):
+                if header in self.all_elements and i < len(values_row2):
+                    value_str = values_row2[i]
+                    try:
+                        value_str = value_str.replace(',', '.').replace(' ', '')
+                        if '±' in value_str:
+                            value_str = value_str.split('±')[0]
+                        value = float(value_str)
+                        composition[header] = value
+                    except (ValueError, IndexError):
+                        continue
+
             return composition
         except Exception as e:
             st.error(f"Ошибка при парсинге таблицы: {str(e)}")
@@ -602,16 +597,23 @@ class ChemicalAnalyzer:
             return "normal"
 
     def create_report_tables(self, samples):
-        """Создание таблиц отчета с правильной нумерацией"""
+        """Создание таблиц отчета с правильной нумерацией - ТОЛЬКО СОПОСТАВЛЕННЫЕ ОБРАЗЦЫ"""
         if not samples:
             return None
         
-        # Группируем образцы по марке стали
-        steel_grades = list(set(sample["steel_grade"] for sample in samples if sample["steel_grade"]))
+        # Фильтруем только сопоставленные образцы (те, у которых есть correct_number)
+        matched_samples = [s for s in samples if s.get('correct_number') is not None]
+        
+        if not matched_samples:
+            st.warning("❌ Нет сопоставленных образцов для создания таблиц")
+            return None
+        
+        # Группируем сопоставленные образцы по марке стали
+        steel_grades = list(set(sample["steel_grade"] for sample in matched_samples if sample["steel_grade"]))
         tables = {}
         
         for grade in steel_grades:
-            grade_samples = [s for s in samples if s["steel_grade"] == grade]
+            grade_samples = [s for s in matched_samples if s["steel_grade"] == grade]
             
             if grade not in self.standards:
                 st.warning(f"Нет нормативов для марки стали: {grade}")
@@ -635,13 +637,10 @@ class ChemicalAnalyzer:
             else:
                 norm_elements = [elem for elem in standard.keys() if elem != "source"]
             
-            # Сортируем образцы: сначала сопоставленные с правильными номерами, затем остальные
+            # Сортируем образцы по correct_number (порядку из файла с правильными названиями)
             sorted_samples = sorted(
                 grade_samples,
-                key=lambda x: (
-                    x.get('correct_number') is None,  # False (0) сначала, True (1) потом
-                    x.get('correct_number', float('inf'))
-                )
+                key=lambda x: x.get('correct_number', float('inf'))
             )
             
             # Создаем данные для таблицы
@@ -775,7 +774,10 @@ def create_word_report(tables, samples, analyzer):
         title.alignment = WD_ALIGN_PARAGRAPH.CENTER
         
         doc.add_paragraph(f"Дата формирования: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
-        doc.add_paragraph(f"Проанализировано образцов: {len(samples)}")
+        
+        # Считаем только сопоставленные образцы
+        matched_samples = [s for s in samples if s.get('correct_number') is not None]
+        doc.add_paragraph(f"Проанализировано образцов: {len(matched_samples)}")
         doc.add_paragraph("")
         
         # Легенда
@@ -938,7 +940,7 @@ def main():
             if st.session_state.samples:
                 st.header("📊 Результаты анализа")
                 
-                # Создаем таблицы отчета
+                # Создаем таблицы отчета - ТОЛЬКО СОПОСТАВЛЕННЫЕ ОБРАЗЦЫ
                 report_tables = analyzer.create_report_tables(st.session_state.samples)
                 
                 if report_tables:
@@ -967,25 +969,44 @@ def main():
                     # Кнопка для создания Word отчета
                     if st.button("📄 Создать Word отчет"):
                         create_word_report(export_tables, st.session_state.samples, analyzer)
+                else:
+                    st.warning("❌ Нет сопоставленных образцов для создания таблиц отчета")
                 
                 # Детальная информация об образцах
                 st.header("📋 Детальная информация об образцах")
                 
-                with st.expander("🔍 Просмотр всех образцов"):
-                    for sample in st.session_state.samples:
-                        st.write(f"**{sample['name']}**")
-                        st.write(f"  - Исходное название: {sample['original_name']}")
-                        st.write(f"  - Марка стали: {sample['steel_grade']}")
-                        
-                        if sample.get('correct_number'):
+                # Разделяем на сопоставленные и несопоставленные
+                matched_samples = [s for s in st.session_state.samples if s.get('correct_number') is not None]
+                unmatched_samples = [s for s in st.session_state.samples if s.get('correct_number') is None]
+                
+                if matched_samples:
+                    with st.expander(f"✅ Сопоставленные образцы ({len(matched_samples)} шт.)"):
+                        for sample in matched_samples:
+                            st.write(f"**{sample['name']}**")
+                            st.write(f"  - Исходное название: {sample['original_name']}")
+                            st.write(f"  - Марка стали: {sample['steel_grade']}")
                             st.write(f"  - Номер в списке: {sample['correct_number']}")
-                        
-                        if sample.get('composition'):
-                            st.write("  - Химический состав:")
-                            for element, value in sample['composition'].items():
-                                st.write(f"    - {element}: {value:.3f}")
-                        
-                        st.write("---")
+                            
+                            if sample.get('composition'):
+                                st.write("  - Химический состав:")
+                                for element, value in sample['composition'].items():
+                                    st.write(f"    - {element}: {value:.3f}")
+                            
+                            st.write("---")
+                
+                if unmatched_samples:
+                    with st.expander(f"⚠️ Несопоставленные образцы ({len(unmatched_samples)} шт.)"):
+                        st.info("Эти образцы не войдут в финальные таблицы отчета")
+                        for sample in unmatched_samples:
+                            st.write(f"**{sample['original_name']}**")
+                            st.write(f"  - Марка стали: {sample['steel_grade']}")
+                            
+                            if sample.get('composition'):
+                                st.write("  - Химический состав:")
+                                for element, value in sample['composition'].items():
+                                    st.write(f"    - {element}: {value:.3f}")
+                            
+                            st.write("---")
 
 
 if __name__ == "__main__":
