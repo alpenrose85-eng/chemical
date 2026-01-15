@@ -687,8 +687,9 @@ class ChemicalAnalyzer:
         if 'manual_matches' in st.session_state and st.session_state.manual_matches:
             # Получаем правильные названия из сохраненных образцов
             correct_samples = st.session_state.get('correct_samples', [])
-            correct_dict = {cs['original']: cs for cs in correct_samples}
-            samples = self.apply_manual_matches(samples, correct_dict, st.session_state.manual_matches)
+            if correct_samples:
+                correct_dict = {cs['original']: cs for cs in correct_samples}
+                samples = self.apply_manual_matches(samples, correct_dict, st.session_state.manual_matches)
         
         # Фильтруем только сопоставленные образцы (те, у которых есть correct_number)
         matched_samples = [s for s in samples if s.get('correct_number') is not None]
@@ -852,9 +853,24 @@ def set_font_times_new_roman(doc):
                         run.font.name = 'Times New Roman'
 
 
-def create_word_report(tables, samples, analyzer):
+def create_word_report(samples, analyzer, report_tables=None):
     """Создание Word отчета"""
     try:
+        # Если таблицы не предоставлены, создаем их
+        if report_tables is None:
+            # Применяем текущие ручные сопоставления перед созданием таблиц
+            if 'manual_matches' in st.session_state and st.session_state.manual_matches:
+                correct_samples = st.session_state.get('correct_samples', [])
+                if correct_samples:
+                    correct_dict = {cs['original']: cs for cs in correct_samples}
+                    samples = analyzer.apply_manual_matches(samples, correct_dict, st.session_state.manual_matches)
+            
+            # Создаем таблицы
+            report_tables = analyzer.create_report_tables(samples)
+            if not report_tables:
+                st.warning("Нет данных для создания отчета")
+                return
+        
         doc = Document()
         set_font_times_new_roman(doc)
         
@@ -863,12 +879,6 @@ def create_word_report(tables, samples, analyzer):
         title.alignment = WD_ALIGN_PARAGRAPH.CENTER
         
         doc.add_paragraph(f"Дата формирования: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
-        
-        # Применяем текущие ручные сопоставления перед подсчетом
-        if 'manual_matches' in st.session_state and st.session_state.manual_matches:
-            correct_samples = st.session_state.get('correct_samples', [])
-            correct_dict = {cs['original']: cs for cs in correct_samples}
-            samples = analyzer.apply_manual_matches(samples, correct_dict, st.session_state.manual_matches)
         
         # Считаем только сопоставленные образцы
         matched_samples = [s for s in samples if s.get('correct_number') is not None]
@@ -889,7 +899,7 @@ def create_word_report(tables, samples, analyzer):
         doc.add_paragraph()
         
         # Добавляем таблицы для каждой марки стали
-        for grade, table_data in tables.items():
+        for grade, table_data in report_tables.items():
             doc.add_heading(f'Марка стали: {grade}', level=1)
             
             df = table_data["data"]
@@ -937,6 +947,10 @@ def main():
         st.session_state.samples = []
     if 'correct_samples' not in st.session_state:
         st.session_state.correct_samples = []
+    if 'manual_matches' not in st.session_state:
+        st.session_state.manual_matches = {}
+    if 'report_tables' not in st.session_state:
+        st.session_state.report_tables = None
     
     # Сайдбар с нормативами
     with st.sidebar:
@@ -1042,6 +1056,9 @@ def main():
                 report_tables = analyzer.create_report_tables(st.session_state.samples)
                 
                 if report_tables:
+                    # Сохраняем таблицы в session_state
+                    st.session_state.report_tables = report_tables
+                    
                     # Отображаем легенду
                     st.markdown("""
                     **Легенда:**
@@ -1066,7 +1083,8 @@ def main():
                     
                     # Кнопка для создания Word отчета
                     if st.button("📄 Создать Word отчет"):
-                        create_word_report(export_tables, st.session_state.samples, analyzer)
+                        # Используем сохраненные таблицы из session_state
+                        create_word_report(st.session_state.samples, analyzer, st.session_state.report_tables)
                 else:
                     st.warning("❌ Нет сопоставленных образцов для создания таблиц отчета")
                 
