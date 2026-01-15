@@ -472,6 +472,67 @@ class ChemicalAnalyzer:
         
         return all_samples, correct_samples
 
+    def apply_manual_matches(self, samples, correct_dict, manual_matches):
+        """Применение ручных сопоставлений к образцам"""
+        updated_samples = []
+        
+        # Определяем конфликты (когда одно правильное название выбрано для нескольких образцов)
+        used_names = {}
+        conflicts = []
+        
+        for original_name, correct_name in manual_matches.items():
+            if correct_name:
+                if correct_name in used_names:
+                    conflicts.append((original_name, correct_name, used_names[correct_name]))
+                else:
+                    used_names[correct_name] = original_name
+        
+        # Разрешаем конфликты - оставляем только последнее сопоставление
+        resolved_matches = {}
+        for original_name, correct_name in manual_matches.items():
+            if correct_name:
+                if correct_name not in resolved_matches.values():
+                    resolved_matches[original_name] = correct_name
+                else:
+                    # Находим, какой образец уже имеет это название
+                    existing_original = [k for k, v in resolved_matches.items() if v == correct_name][0]
+                    # Удаляем у старого образца
+                    st.warning(f"Название '{correct_name}' выбрано для нескольких образцов. Оставлено для '{original_name}', образец '{existing_original}' останется без названия.")
+        
+        # Обновляем образцы с учетом ручных сопоставлений
+        for sample in samples:
+            updated_sample = sample.copy()
+            
+            if sample['original_name'] in resolved_matches:
+                correct_name = resolved_matches[sample['original_name']]
+                
+                if correct_name and correct_name in correct_dict:
+                    # Образец сопоставлен
+                    updated_sample['name'] = correct_name
+                    updated_sample['correct_number'] = correct_dict[correct_name]['number']
+                    updated_sample['manually_matched'] = True
+                    updated_sample['automatically_matched'] = False
+                    updated_sample['match_stage'] = "ручное сопоставление"
+                else:
+                    # Образец не сопоставлен (некорректное название)
+                    updated_sample['name'] = sample['original_name']
+                    updated_sample['correct_number'] = None
+                    updated_sample['manually_matched'] = False
+                    updated_sample['automatically_matched'] = False
+            else:
+                # Если нет ручного сопоставления, оставляем как было
+                if not sample.get('automatically_matched'):
+                    updated_sample['name'] = sample['original_name']
+                    updated_sample['correct_number'] = None
+                    updated_sample['manually_matched'] = False
+                    updated_sample['automatically_matched'] = False
+                else:
+                    updated_sample['manually_matched'] = False
+            
+            updated_samples.append(updated_sample)
+        
+        return updated_samples
+
     def add_manual_matching_interface(self, samples, correct_samples):
         """Интерфейс для ручного сопоставления образцов"""
         st.header("🔧 Ручное сопоставление образцов")
@@ -484,12 +545,6 @@ class ChemicalAnalyzer:
         correct_dict = {cs['original']: cs for cs in correct_samples}
         correct_names_list = [cs['original'] for cs in correct_samples]
         
-        # Определяем уже использованные названия
-        used_names = set()
-        for sample in samples:
-            if sample.get('automatically_matched') and sample['name'] in correct_names_list:
-                used_names.add(sample['name'])
-        
         # Группируем образцы по марке стали
         samples_by_grade = {}
         for sample in samples:
@@ -498,6 +553,7 @@ class ChemicalAnalyzer:
                 samples_by_grade[grade] = []
             samples_by_grade[grade].append(sample)
         
+        # Создаем интерфейс для ручного сопоставления
         for grade, grade_samples in samples_by_grade.items():
             st.subheader(f"Марка стали: {grade}")
             
@@ -514,34 +570,37 @@ class ChemicalAnalyzer:
                     if protocol_info['tube_number']:
                         st.write(f"*Труба: {protocol_info['tube_number']}*")
                     
+                    # Показываем текущий статус
+                    current_status = ""
                     if sample.get('automatically_matched'):
-                        st.success("✅ Автоматически сопоставлен")
+                        current_status = "✅ Автоматически сопоставлен"
+                    elif sample['original_name'] in st.session_state.manual_matches:
+                        current_status = "📝 Ручное сопоставление"
                     else:
-                        st.warning("❌ Не сопоставлен")
+                        current_status = "❌ Не сопоставлен"
+                    
+                    st.write(f"*Статус: {current_status}*")
                 
                 with col2:
-                    # Доступные варианты для сопоставления
-                    available_options = ["Не сопоставлен"]
+                    # Создаем список всех доступных правильных названий
+                    all_options = ["Не сопоставлен"] + correct_names_list
                     
-                    # Добавляем только те названия, которые еще не использованы или уже сопоставлены с этим образцом
-                    for correct_name in correct_names_list:
-                        if (correct_name not in used_names or 
-                            st.session_state.manual_matches.get(sample['original_name']) == correct_name):
-                            available_options.append(correct_name)
+                    # Определяем текущее значение для этого образца
+                    current_value = st.session_state.manual_matches.get(
+                        sample['original_name'], 
+                        sample['name'] if sample.get('automatically_matched') else "Не сопоставлен"
+                    )
                     
-                    # Определяем текущее значение
-                    current_match = st.session_state.manual_matches.get(sample['original_name'], 
-                                                                       sample['name'] if sample.get('automatically_matched') else "Не сопоставлен")
+                    # Если текущее значение не в списке, сбрасываем
+                    if current_value not in all_options:
+                        current_value = "Не сопоставлен"
                     
-                    # Если текущее сопоставление не в списке, добавляем его
-                    if current_match not in available_options and current_match != "Не сопоставлен":
-                        available_options.append(current_match)
-                    
+                    # Создаем selectbox со всеми вариантами
                     selected = st.selectbox(
                         f"Выберите правильное название для образца {i+1}",
-                        options=available_options,
-                        index=available_options.index(current_match) if current_match in available_options else 0,
-                        key=f"manual_match_{sample['original_name']}_{i}"
+                        options=all_options,
+                        index=all_options.index(current_value) if current_value in all_options else 0,
+                        key=f"manual_match_{sample['original_name']}_{grade}_{i}"
                     )
                     
                     # Сохраняем выбор в session_state
@@ -549,36 +608,59 @@ class ChemicalAnalyzer:
                         st.session_state.manual_matches[sample['original_name']] = selected
                     elif sample['original_name'] in st.session_state.manual_matches:
                         del st.session_state.manual_matches[sample['original_name']]
+            
+            st.markdown("---")
         
-        # Кнопка применения ручного сопоставления
-        if st.button("✅ Применить ручное сопоставление"):
-            updated_samples = []
-            
-            # Обновляем образцы с учетом ручных сопоставлений
-            for sample in samples:
-                updated_sample = sample.copy()
+        # Кнопки управления
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if st.button("🔄 Сбросить все ручные сопоставления"):
+                st.session_state.manual_matches = {}
+                st.rerun()
+        
+        with col2:
+            if st.button("✅ Применить ручное сопоставление"):
+                # Применяем ручные сопоставления
+                updated_samples = self.apply_manual_matches(samples, correct_dict, st.session_state.manual_matches)
                 
-                if sample['original_name'] in st.session_state.manual_matches:
-                    correct_name = st.session_state.manual_matches[sample['original_name']]
+                # Показываем сводку изменений
+                st.success(f"✅ Ручное сопоставление применено! Обновлено {len(st.session_state.manual_matches)} образцов.")
+                
+                # Показываем изменения
+                with st.expander("📋 Сводка изменений"):
+                    changes = []
+                    for sample in updated_samples:
+                        original_sample = next((s for s in samples if s['original_name'] == sample['original_name']), None)
+                        if original_sample:
+                            if sample.get('manually_matched') and original_sample.get('automatically_matched'):
+                                changes.append({
+                                    'Образец': sample['original_name'],
+                                    'Было': original_sample['name'],
+                                    'Стало': sample['name'],
+                                    'Тип': 'Переназначение'
+                                })
+                            elif sample.get('manually_matched') and not original_sample.get('automatically_matched'):
+                                changes.append({
+                                    'Образец': sample['original_name'],
+                                    'Было': 'Не сопоставлен',
+                                    'Стало': sample['name'],
+                                    'Тип': 'Новое сопоставление'
+                                })
+                            elif original_sample.get('automatically_matched') and not sample.get('automatically_matched'):
+                                changes.append({
+                                    'Образец': sample['original_name'],
+                                    'Было': original_sample['name'],
+                                    'Стало': 'Не сопоставлен',
+                                    'Тип': 'Удалено сопоставление'
+                                })
                     
-                    if correct_name in correct_dict:
-                        updated_sample['name'] = correct_name
-                        updated_sample['correct_number'] = correct_dict[correct_name]['number']
-                        updated_sample['manually_matched'] = True
-                        updated_sample['automatically_matched'] = False
+                    if changes:
+                        st.table(pd.DataFrame(changes))
                     else:
-                        # Если выбранное название не найдено в списке правильных
-                        updated_sample['name'] = correct_name
-                        updated_sample['correct_number'] = None
-                        updated_sample['manually_matched'] = True
-                        updated_sample['automatically_matched'] = False
-                else:
-                    updated_sample['manually_matched'] = False
+                        st.info("Изменений нет")
                 
-                updated_samples.append(updated_sample)
-            
-            st.success(f"Ручное сопоставление применено! Обновлено {len(st.session_state.manual_matches)} образцов.")
-            return updated_samples
+                return updated_samples
         
         return samples
 
@@ -600,6 +682,13 @@ class ChemicalAnalyzer:
         """Создание таблиц отчета с правильной нумерацией - ТОЛЬКО СОПОСТАВЛЕННЫЕ ОБРАЗЦЫ"""
         if not samples:
             return None
+        
+        # Применяем текущие ручные сопоставления из session_state
+        if 'manual_matches' in st.session_state and st.session_state.manual_matches:
+            # Получаем правильные названия из сохраненных образцов
+            correct_samples = st.session_state.get('correct_samples', [])
+            correct_dict = {cs['original']: cs for cs in correct_samples}
+            samples = self.apply_manual_matches(samples, correct_dict, st.session_state.manual_matches)
         
         # Фильтруем только сопоставленные образцы (те, у которых есть correct_number)
         matched_samples = [s for s in samples if s.get('correct_number') is not None]
@@ -775,6 +864,12 @@ def create_word_report(tables, samples, analyzer):
         
         doc.add_paragraph(f"Дата формирования: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
         
+        # Применяем текущие ручные сопоставления перед подсчетом
+        if 'manual_matches' in st.session_state and st.session_state.manual_matches:
+            correct_samples = st.session_state.get('correct_samples', [])
+            correct_dict = {cs['original']: cs for cs in correct_samples}
+            samples = analyzer.apply_manual_matches(samples, correct_dict, st.session_state.manual_matches)
+        
         # Считаем только сопоставленные образцы
         matched_samples = [s for s in samples if s.get('correct_number') is not None]
         doc.add_paragraph(f"Проанализировано образцов: {len(matched_samples)}")
@@ -932,6 +1027,9 @@ def main():
                     all_samples, 
                     st.session_state.correct_samples
                 )
+                
+                # Сохраняем обновленные образцы в session_state
+                st.session_state.samples = all_samples
             
             # Сохраняем образцы в session_state
             st.session_state.samples = all_samples
