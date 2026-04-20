@@ -349,6 +349,26 @@ class ChemicalAnalyzer:
                 user_std = json.load(f)
                 self.standards.update(user_std)
 
+    def extract_steel_grade_from_text(self, text):
+        """Извлекает марку стали из разных формулировок в протоколе"""
+        if not text:
+            return None
+
+        patterns = [
+            r'марке\s+стали\s*:\s*([^,;\n]+)',
+            r'близок\s+к\s+марке\s+стали\s*:\s*([^,;\n]+)',
+            r'соответствует\s+марке\s+стали\s*:\s*([^,;\n]+)',
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, text, flags=re.IGNORECASE)
+            if match:
+                grade_text = match.group(1).strip()
+                grade_text = re.sub(r'\*+', '', grade_text).strip()
+                grade_text = grade_text.split(',')[0].strip()
+                return grade_text or None
+        return None
+
     def parse_protocol_file(self, file_content):
         try:
             doc = Document(io.BytesIO(file_content))
@@ -357,9 +377,11 @@ class ChemicalAnalyzer:
 
             for paragraph in doc.paragraphs:
                 text = paragraph.text.strip()
+                if not text:
+                    continue
 
                 if "Наименование образца:" in text:
-                    sample_name = text.split("Наименование образца:")[1].strip()
+                    sample_name = text.split("Наименование образца:", 1)[1].strip()
                     current_sample = {
                         "name": sample_name,
                         "steel_grade": None,
@@ -367,13 +389,11 @@ class ChemicalAnalyzer:
                         "original_name": sample_name
                     }
                     samples.append(current_sample)
+                    continue
 
-                elif "Химический состав металла образца соответствует марке стали:" in text:
-                    if current_sample:
-                        grade_text = text.split("марке стали:")[1].strip()
-                        grade_text = re.sub(r'\*+', '', grade_text).strip()
-                        grade_text = grade_text.split(',')[0].strip()
-                        current_sample["steel_grade"] = grade_text
+                grade_text = self.extract_steel_grade_from_text(text)
+                if grade_text and current_sample:
+                    current_sample["steel_grade"] = grade_text
 
             table_index = 0
             for table in doc.tables:
