@@ -1,3 +1,14 @@
+Причина ошибки: после ручного сопоставления и перезапуска приложения (st.rerun) происходил повторный парсинг файлов протоколов, который перезаписывал `st.session_state.samples` исходными данными без учёта ручных сопоставлений. В итоге таблица отчета создавалась из «чистых» образцов, у которых не было `correct_number`, поэтому второй образец не попадал в финальную таблицу.
+
+Также автоматическое сопоставление не срабатывало для второго образца, потому что алгоритм извлекал номер трубы «7» (из «зм.7»), а в правильных названиях был номер «44/11». Это нормальная ситуация, требующая ручного сопоставления.
+
+**Исправления:**
+1. Добавлено кэширование распарсенных данных протоколов и правильных названий в `session_state` с проверкой изменений файлов (по имени и размеру). Повторный парсинг происходит только при изменении загруженных файлов.
+2. Автоматическое сопоставление выполняется только один раз (при первом запуске или после изменения файлов). Ручные сопоставления применяются поверх и сохраняются в `session_state.samples`.
+3. При создании таблиц отчета всегда используются актуальные `st.session_state.samples`, где у образцов проставлены `correct_number` (в том числе после ручного сопоставления).
+4. Устранена проблема повторной перезаписи `samples` при rerun.
+
+```python
 import streamlit as st
 import pandas as pd
 from docx import Document
@@ -660,7 +671,9 @@ class ChemicalAnalyzer:
                     else:
                         st.info("Изменений нет")
                 
-                return updated_samples
+                # Обновляем session_state и перезапускаем
+                st.session_state.samples = updated_samples
+                st.rerun()
         
         return samples
 
@@ -951,6 +964,12 @@ def main():
         st.session_state.manual_matches = {}
     if 'report_tables' not in st.session_state:
         st.session_state.report_tables = None
+    if 'last_correct_hash' not in st.session_state:
+        st.session_state.last_correct_hash = None
+    if 'last_protocols_hash' not in st.session_state:
+        st.session_state.last_protocols_hash = None
+    if 'parsed_samples' not in st.session_state:
+        st.session_state.parsed_samples = []
     
     # Сайдбар с нормативами
     with st.sidebar:
@@ -990,7 +1009,15 @@ def main():
     )
     
     if correct_names_file:
-        st.session_state.correct_samples = analyzer.name_matcher.parse_correct_names(correct_names_file.getvalue())
+        # Вычисляем хэш файла (имя + размер)
+        current_hash = (correct_names_file.name, correct_names_file.size)
+        if st.session_state.last_correct_hash != current_hash:
+            st.session_state.correct_samples = analyzer.name_matcher.parse_correct_names(correct_names_file.getvalue())
+            st.session_state.last_correct_hash = current_hash
+            # При изменении файла сбрасываем ручные сопоставления и образцы
+            st.session_state.manual_matches = {}
+            st.session_state.samples = []
+        
         if st.session_state.correct_samples:
             st.success(f"✅ Загружено {len(st.session_state.correct_samples)} правильных названий образцов")
             
@@ -1016,37 +1043,46 @@ def main():
     )
     
     if uploaded_files:
-        all_samples = []
+        # Вычисляем хэш набора файлов (имена и размеры)
+        current_protocols_hash = tuple((f.name, f.size) for f in uploaded_files)
+        if st.session_state.last_protocols_hash != current_protocols_hash:
+            # Парсим заново
+            all_samples = []
+            for f in uploaded_files:
+                all_samples.extend(analyzer.parse_protocol_file(f.getvalue()))
+            st.session_state.parsed_samples = all_samples
+            st.session_state.last_protocols_hash = current_protocols_hash
+            # Сбрасываем старые сопоставления
+            st.session_state.samples = []
+            st.session_state.manual_matches = {}
         
-        # Парсим каждый загруженный файл
-        for uploaded_file in uploaded_files:
-            samples = analyzer.parse_protocol_file(uploaded_file.getvalue())
-            all_samples.extend(samples)
+        all_samples = st.session_state.parsed_samples
         
         if all_samples:
             st.success(f"✅ Загружено {len(all_samples)} образцов из протоколов")
             
-            # Если есть правильные названия, проводим сопоставление
+            # Если есть правильные названия, проводим сопоставление (только если samples еще не заполнены)
             if correct_names_file and st.session_state.correct_samples:
                 st.header("🔍 Сопоставление названий образцов")
                 
-                # Автоматическое сопоставление
-                all_samples, loaded_correct_samples = analyzer.match_sample_names(
-                    all_samples, 
-                    correct_names_file
-                )
+                # Если samples пусты, выполняем автоматическое сопоставление
+                if not st.session_state.samples:
+                    # Автоматическое сопоставление
+                    matched_samples, _ = analyzer.match_sample_names(
+                        all_samples, 
+                        correct_names_file
+                    )
+                    st.session_state.samples = matched_samples
                 
-                # Ручное сопоставление
-                all_samples = analyzer.add_manual_matching_interface(
-                    all_samples, 
+                # Ручное сопоставление (работает с текущими st.session_state.samples)
+                st.session_state.samples = analyzer.add_manual_matching_interface(
+                    st.session_state.samples, 
                     st.session_state.correct_samples
                 )
-                
-                # Сохраняем обновленные образцы в session_state
-                st.session_state.samples = all_samples
             
-            # Сохраняем образцы в session_state
-            st.session_state.samples = all_samples
+            # Сохраняем образцы в session_state (если еще не сохранены)
+            if not st.session_state.samples:
+                st.session_state.samples = all_samples
             
             # Отображаем результаты
             if st.session_state.samples:
@@ -1086,7 +1122,7 @@ def main():
                         # Используем сохраненные таблицы из session_state
                         create_word_report(st.session_state.samples, analyzer, st.session_state.report_tables)
                 else:
-                    st.warning("❌ Нет сопоставленных образцов для создания таблиц отчета")
+                    st.warning("❌ Нет сопоставленных образцов для создания таблиц отчета. Пожалуйста, выполните ручное сопоставление.")
                 
                 # Детальная информация об образцах
                 st.header("📋 Детальная информация об образцах")
@@ -1127,3 +1163,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+```
